@@ -25,7 +25,7 @@ cd frontend && npm run dev     # → http://localhost:5173 (proxies /api and /fi
 | Generated images | `data/outputs/images/YYYY-MM-DD/*.png` (settings embedded as PNG text chunks) |
 | Thumbnails | `data/outputs/thumbs/` |
 | Asset database | `data/trivexa.db` (SQLite) |
-| SDXL configs/tokenizers | `data/hf-configs/` (fetched once on first load, a few MB, no weights) |
+| Model configs/tokenizers | `data/hf-configs/` (fetched once per architecture on first load, a few MB, no weights) |
 
 `TRIVEXA_DATA_DIR` moves the whole `data/` folder.
 
@@ -37,12 +37,16 @@ backend/trivexa/
   jobs.py          single-GPU job queue + progress broadcast
   store.py         saving images/thumbnails + SQLite records
   models.py        checkpoint discovery, arch detection from safetensors headers
-  engines/sdxl.py  SDXL pipeline (single-file checkpoints, long-prompt chunking, live previews)
+  engines/diffusion.py  SDXL + SD 1.5 pipelines (single-file checkpoints, long-prompt chunking, live previews)
 frontend/src/      React UI (Vite)
 ```
 
 ## Notes
 
-- Only SDXL-architecture checkpoints (incl. Illustrious/Pony derivatives) are offered; SD1.5 files are detected but not wired up yet.
+- SDXL (incl. Illustrious/Pony derivatives) and SD 1.5 checkpoints are supported. Architecture is detected from the
+  safetensors header; inpainting variants, SD 2.x and non-image checkpoints are hidden. One model is kept in VRAM
+  at a time, so switching models reloads (~3s SD 1.5, ~15s SDXL).
+- CLIP skip 1 is each architecture's standard layer (last for SD 1.5, penultimate for SDXL); 2 matches A1111's
+  "CLIP skip 2" on SD 1.5.
 - Prompts longer than 77 tokens are encoded in chunks rather than truncated. `(word:1.2)` weighting syntax is not parsed yet.
 - The SDXL VAE decodes in bf16 to avoid the fp16 NaN issue without the fp32 memory spike.
