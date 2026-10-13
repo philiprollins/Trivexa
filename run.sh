@@ -11,7 +11,14 @@ if [ ! -d frontend/dist ] || [ -n "$(find frontend/src frontend/index.html -newe
   (cd frontend && npm install --silent && npm run build)
 fi
 
-(cd backend && uv sync --quiet)
+# The "texture" extra (MV-Adapter's texture baker) compiles nvdiffrast, which needs the CUDA toolkit.
+# If that fails, run without it; Texture then uses the lean baker (see settings.toml).
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+export PATH="$CUDA_HOME/bin:$PATH"
+if ! (cd backend && uv sync --quiet --extra texture); then
+  echo "Could not install the texture extra; continuing without it (lean texture baker only)." >&2
+  (cd backend && uv sync --quiet)
+fi
 
 echo "Trivexa → http://$HOST:$PORT"
 exec backend/.venv/bin/uvicorn trivexa.main:app --app-dir backend --host "$HOST" --port "$PORT"

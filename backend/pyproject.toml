@@ -24,7 +24,23 @@ dependencies = [
     "opencv-python-headless>=5.0.0.93",
 ]
 
+[project.optional-dependencies]
+# MV-Adapter's texture baker (the default when installed; see settings.toml). nvdiffrast is compiled
+# against the installed torch, so building it needs the CUDA toolkit (nvcc) and ninja.
+texture = [
+    "nvdiffrast",
+    "open3d>=0.19",
+    "pymeshlab>=2023.12",
+    "spandrel>=0.4",
+    "gltflib>=1.0",
+    "cvcuda-cu13>=0.18",
+]
+
+[tool.uv]
+no-build-isolation-package = ["nvdiffrast"]
+
 [tool.uv.sources]
+nvdiffrast = { git = "https://github.com/NVlabs/nvdiffrast", tag = "v0.4.0" }
 torch = { index = "pytorch-cu130" }
 torchvision = { index = "pytorch-cu130" }
 
