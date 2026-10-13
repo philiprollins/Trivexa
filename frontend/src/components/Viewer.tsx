@@ -93,11 +93,6 @@ export function Viewer({ asset, job, queuePosition, onCancel, onToggleFavorite, 
                 </a>
               ))}
             </div>
-            {asset.reference_url && (
-              <a href={asset.reference_url} target="_blank" rel="noreferrer" className="mv-reference" title="Reference used">
-                <img src={asset.reference_url} alt="Reference" />
-              </a>
-            )}
           </div>
         ) : (
           <a href={asset.url} target="_blank" rel="noreferrer" className="frame" style={{ aspectRatio: `${asset.width} / ${asset.height}` }}>
@@ -106,6 +101,11 @@ export function Viewer({ asset, job, queuePosition, onCancel, onToggleFavorite, 
         )}
       </div>
       <div className="toolbar">
+        {asset.reference_url && (
+          <a href={asset.reference_url} target="_blank" rel="noreferrer" className="toolbar-ref" title="Reference used (open full size)">
+            <img src={asset.reference_url} alt="Reference" />
+          </a>
+        )}
         <p className="toolbar-prompt" title={asset.prompt}>
           {asset.prompt || (asset.kind === "multiview" ? "Multiview from image" : "")}
         </p>
