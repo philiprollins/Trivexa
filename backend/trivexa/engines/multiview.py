@@ -15,6 +15,7 @@ import torch
 from PIL import Image
 
 from ..config import MV_ADAPTER_DIR
+from ..vendor.mvadapter.models.attention_processor import DecoupledMVRowColSelfAttnProcessor2_0
 from ..vendor.mvadapter.pipelines.pipeline_mvadapter_i2mv_sdxl import MVAdapterI2MVSDXLPipeline
 from ..vendor.mvadapter.pipelines.pipeline_mvadapter_t2mv_sdxl import MVAdapterT2MVSDXLPipeline
 from ..vendor.mvadapter.schedulers.scheduling_shift_snr import ShiftSNRScheduler
@@ -24,9 +25,13 @@ from .diffusion import ARCHS, SAMPLERS, config_dir, decode_latents, make_step_ca
 
 log = logging.getLogger(__name__)
 
+# mode -> (pipeline class, adapter weights, self-attention processor or None for the default row attention)
 MODES = {
-    "t2mv": (MVAdapterT2MVSDXLPipeline, "mvadapter_t2mv_sdxl.safetensors"),
-    "i2mv": (MVAdapterI2MVSDXLPipeline, "mvadapter_i2mv_sdxl.safetensors"),
+    "t2mv": (MVAdapterT2MVSDXLPipeline, "mvadapter_t2mv_sdxl.safetensors", None),
+    "i2mv": (MVAdapterI2MVSDXLPipeline, "mvadapter_i2mv_sdxl.safetensors", None),
+    # Geometry-guided: conditioned on position/normal maps rendered from a mesh (incl. top/bottom views),
+    # so it needs row+column attention. Used for texturing; the caller supplies the condition maps.
+    "ig2mv": (MVAdapterI2MVSDXLPipeline, "mvadapter_ig2mv_sdxl.safetensors", DecoupledMVRowColSelfAttnProcessor2_0),
 }
 # Front, front-right, right, back, left, front-left (degrees around the object).
 AZIMUTHS = [0, 45, 90, 180, 270, 315]
@@ -47,8 +52,9 @@ class MVParams:
     cfg: float
     sampler: str
     seed: int
-    reference: Image.Image | None = None  # i2mv only, already preprocessed to VIEW_SIZE
+    reference: Image.Image | None = None  # i2mv/ig2mv, already preprocessed to VIEW_SIZE
     reference_scale: float = 1.0
+    control_images: torch.Tensor | None = None  # ig2mv: (6, 6, H, W) position+normal maps in [0, 1]
 
 
 def prepare_reference(rgba: Image.Image, size: int = VIEW_SIZE) -> Image.Image:
@@ -88,7 +94,7 @@ class MultiviewEngine:
         if self.pipe is not None and self.mode == mode and self.model_path == model_path:
             return
         self.unload()
-        pipeline_cls, weight_name = MODES[mode]
+        pipeline_cls, weight_name, attn_processor = MODES[mode]
         log.info("Loading MV-Adapter %s on %s", mode, model_path.name)
         pipe = pipeline_cls.from_single_file(
             str(model_path),
@@ -97,7 +103,10 @@ class MultiviewEngine:
             local_files_only=True,
         )
         # Swap the UNet's attention processors for multi-view ones, then load the adapter weights into them.
-        pipe.init_custom_adapter(num_views=len(AZIMUTHS))
+        if attn_processor is None:
+            pipe.init_custom_adapter(num_views=len(AZIMUTHS))
+        else:
+            pipe.init_custom_adapter(num_views=len(AZIMUTHS), self_attn_processor=attn_processor)
         pipe.load_custom_adapter(str(MV_ADAPTER_DIR), weight_name=weight_name, local_files_only=True)
         pipe.to(device=self.device, dtype=torch.float16)
         pipe.cond_encoder.to(device=self.device, dtype=torch.float16)
@@ -152,8 +161,9 @@ class MultiviewEngine:
 
         callback = make_step_callback(sched, ARCHS["sdxl"], p.steps, on_step, is_cancelled, grid_cols=3)
         kwargs = {}
-        if p.mode == "i2mv":
+        if p.mode in ("i2mv", "ig2mv"):
             kwargs = {"reference_image": p.reference, "reference_conditioning_scale": p.reference_scale}
+        control = self._control_images if p.control_images is None else p.control_images.to(self.device)
 
         # Encode the prompt, then park the text encoders (~1.6 GB) in system RAM while the UNet runs:
         # i2mv's cached reference attention doesn't fit in 16 GB alongside them.
@@ -178,7 +188,7 @@ class MultiviewEngine:
             num_inference_steps=p.steps,
             guidance_scale=p.cfg,
             num_images_per_prompt=len(AZIMUTHS),
-            control_image=self._control_images,
+            control_image=control,
             control_conditioning_scale=1.0,
             generator=torch.Generator("cpu").manual_seed(p.seed),
             callback_on_step_end=callback,
