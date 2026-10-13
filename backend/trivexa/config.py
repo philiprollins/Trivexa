@@ -12,6 +12,8 @@ OUTPUTS_DIR = DATA_DIR / "outputs"
 DB_PATH = DATA_DIR / "trivexa.db"
 # Small architecture configs/tokenizers diffusers needs to build a pipeline from a single checkpoint file.
 HF_CONFIG_DIR = DATA_DIR / "hf-configs"
+# Weights Trivexa downloads itself (e.g. MV-Adapter), as opposed to the shared MODELS_DIR.
+MV_ADAPTER_DIR = DATA_DIR / "models" / "mv-adapter"
 
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 
