@@ -48,7 +48,7 @@ class BackgroundRemover:
             model = self._load().to(self.device)
             try:
                 rgb = image.convert("RGB")
-                x = torch.from_numpy(np.asarray(rgb.resize((INPUT_SIZE, INPUT_SIZE), Image.Resampling.BILINEAR))).permute(2, 0, 1)
+                x = torch.from_numpy(np.array(rgb.resize((INPUT_SIZE, INPUT_SIZE), Image.Resampling.BILINEAR))).permute(2, 0, 1)
                 x = (x.unsqueeze(0).float() / 255 - _MEAN) / _STD
                 pred = model(x.to(self.device, torch.float16))[-1].sigmoid().float()
                 mask = F.interpolate(pred, size=(rgb.height, rgb.width), mode="bilinear", align_corners=False)[0, 0]
