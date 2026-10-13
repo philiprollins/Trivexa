@@ -1,4 +1,5 @@
 import os
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,7 +16,25 @@ HF_CONFIG_DIR = DATA_DIR / "hf-configs"
 # Weights Trivexa downloads itself (e.g. MV-Adapter), as opposed to the shared MODELS_DIR.
 MV_ADAPTER_DIR = DATA_DIR / "models" / "mv-adapter"
 
+TEXTURE_WEIGHTS_DIR = DATA_DIR / "models" / "texture"  # RealESRGAN + LaMa for the upstream texture baker
+
 FRONTEND_DIST = ROOT / "frontend" / "dist"
+
+# User-editable settings (see settings.toml at the repo root; TRIVEXA_SETTINGS points elsewhere).
+SETTINGS_PATH = Path(os.environ.get("TRIVEXA_SETTINGS", ROOT / "settings.toml"))
+_DEFAULTS = {"texture": {"baker": "upstream"}}
+
+
+def _load_settings() -> dict:
+    settings = {section: dict(values) for section, values in _DEFAULTS.items()}
+    if SETTINGS_PATH.is_file():
+        with SETTINGS_PATH.open("rb") as f:
+            for section, values in tomllib.load(f).items():
+                settings.setdefault(section, {}).update(values)
+    return settings
+
+
+SETTINGS = _load_settings()
 
 
 def ensure_dirs() -> None:

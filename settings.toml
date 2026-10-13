@@ -1,0 +1,15 @@
+# Trivexa settings. Restart the server (./run.sh) after changing anything here.
+
+[texture]
+# Which baker turns the six generated views into a UV texture:
+#
+#   "upstream"  MV-Adapter's texture pipeline: UVAtlas unwrapping, RealESRGAN x2 view upscaling and LaMa
+#               view inpainting. Best quality (thin parts and hidden areas) and ~5 s, but needs the optional
+#               "texture" dependencies (`uv sync --extra texture`, which compiles nvdiffrast) and the
+#               ESRGAN/LaMa weights (`uv run python -m trivexa.download esrgan lama`); peaks ~12 GB VRAM.
+#   "lean"      Trivexa's own baker: xatlas unwrapping, OpenGL projection, unseen areas keep the mesh's
+#               vertex colours. ~15-25 s and < 3 GB VRAM with no extra dependencies, but softer and
+#               weaker on thin or occluded parts.
+#
+# If "upstream" is selected but its dependencies or weights are missing, Trivexa falls back to "lean".
+baker = "upstream"
