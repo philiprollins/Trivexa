@@ -17,3 +17,6 @@ frontend/dist/
 .vscode/
 .idea/
 .DS_Store
+
+# Claude Code runtime state
+.claude/*.lock
