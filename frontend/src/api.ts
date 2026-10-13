@@ -21,6 +21,7 @@ export interface ImageParams {
   sampler: string;
   seed: number;
   clip_skip: number;
+  arch?: "sdxl" | "sd15";
   model_name?: string;
   sampler_label?: string;
 }
@@ -62,6 +63,7 @@ export interface Job {
 export interface Status {
   gpu: { name: string; vram_free: number; vram_total: number } | null;
   loaded_model: string | null;
+  loaded_arch: "sdxl" | "sd15" | null;
   pending_jobs: number;
   models_dir: string;
   outputs_dir: string;
@@ -92,7 +94,7 @@ export const api = {
   unload: () => request("/api/unload", { method: "POST" }),
   models: () => request<{ checkpoints: Checkpoint[] }>("/api/models"),
   samplers: () => request<{ samplers: Sampler[] }>("/api/samplers"),
-  generateImage: (params: Omit<ImageParams, "model_name" | "sampler_label"> & { count: number }) =>
+  generateImage: (params: Omit<ImageParams, "model_name" | "sampler_label" | "arch"> & { count: number }) =>
     request<{ jobs: Job[] }>("/api/generate/image", { method: "POST", body: JSON.stringify(params) }),
   cancelJob: (id: string) => request(`/api/jobs/${id}/cancel`, { method: "POST" }),
   assets: (opts: { favorite?: boolean; limit?: number; offset?: number } = {}) => {

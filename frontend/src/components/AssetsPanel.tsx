@@ -98,6 +98,7 @@ function Details({ asset }: { asset: Asset | null }) {
   const pr = asset.params;
   const rows: [string, string | number][] = [
     ["Model", pr.model_name ?? pr.model],
+    ["Architecture", pr.arch === "sd15" ? "SD 1.5" : "SDXL"],
     ["Size", `${asset.width} × ${asset.height}`],
     ["Seed", asset.seed],
     ["Steps", pr.steps],

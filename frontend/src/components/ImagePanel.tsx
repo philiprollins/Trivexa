@@ -2,17 +2,45 @@ import { ChevronDown, Dices, Lock, Sparkles, Zap } from "lucide-react";
 import { useState } from "react";
 import type { Checkpoint, ImageParams, Sampler } from "../api";
 
-export type ImageForm = Omit<ImageParams, "model_name" | "sampler_label"> & { count: number; randomSeed: boolean };
+export type ImageForm = Omit<ImageParams, "model_name" | "sampler_label" | "arch"> & { count: number; randomSeed: boolean };
 
-export const ASPECTS = [
-  { label: "1:1", w: 1024, h: 1024 },
-  { label: "3:4", w: 896, h: 1152 },
-  { label: "2:3", w: 832, h: 1216 },
-  { label: "9:16", w: 768, h: 1344 },
-  { label: "4:3", w: 1152, h: 896 },
-  { label: "3:2", w: 1216, h: 832 },
-  { label: "16:9", w: 1344, h: 768 },
-];
+type Arch = "sdxl" | "sd15";
+export const SUPPORTED_ARCHS: Arch[] = ["sdxl", "sd15"];
+const ARCH_LABELS: Record<Arch, string> = { sdxl: "SDXL", sd15: "SD 1.5" };
+
+// Sizes near each architecture's native training resolution (1024² for SDXL, 512² for SD 1.5).
+export const ASPECTS: Record<Arch, { label: string; w: number; h: number }[]> = {
+  sdxl: [
+    { label: "1:1", w: 1024, h: 1024 },
+    { label: "3:4", w: 896, h: 1152 },
+    { label: "2:3", w: 832, h: 1216 },
+    { label: "9:16", w: 768, h: 1344 },
+    { label: "4:3", w: 1152, h: 896 },
+    { label: "3:2", w: 1216, h: 832 },
+    { label: "16:9", w: 1344, h: 768 },
+  ],
+  sd15: [
+    { label: "1:1", w: 512, h: 512 },
+    { label: "3:4", w: 576, h: 768 },
+    { label: "2:3", w: 512, h: 768 },
+    { label: "9:16", w: 448, h: 800 },
+    { label: "4:3", w: 768, h: 576 },
+    { label: "3:2", w: 768, h: 512 },
+    { label: "16:9", w: 800, h: 448 },
+  ],
+};
+
+export const archOf = (checkpoints: Checkpoint[], id: string) =>
+  checkpoints.find((c) => c.id === id)?.arch as Arch | undefined;
+
+/** Carry the chosen aspect ratio over to another architecture's native size. */
+export function sizeForArch(width: number, height: number, to: Arch): { width: number; height: number } {
+  const label = Object.values(ASPECTS)
+    .flat()
+    .find((a) => a.w === width && a.h === height)?.label;
+  const preset = ASPECTS[to].find((a) => a.label === label) ?? ASPECTS[to][0];
+  return { width: preset.w, height: preset.h };
+}
 
 interface Props {
   form: ImageForm;
@@ -26,9 +54,14 @@ interface Props {
 export function ImagePanel({ form, setForm, checkpoints, samplers, onGenerate, submitting }: Props) {
   const [showNegative, setShowNegative] = useState(Boolean(form.negative));
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const sdxl = checkpoints.filter((c) => c.arch === "sdxl");
-  const otherCount = checkpoints.filter((c) => c.arch === "sd15").length;
-  const canGenerate = form.prompt.trim().length > 0 && sdxl.some((c) => c.id === form.model) && !submitting;
+  const arch = archOf(checkpoints, form.model) ?? "sdxl";
+  const supported = checkpoints.filter((c) => (SUPPORTED_ARCHS as string[]).includes(c.arch));
+  const canGenerate = form.prompt.trim().length > 0 && supported.some((c) => c.id === form.model) && !submitting;
+
+  const selectModel = (id: string) => {
+    const next = archOf(checkpoints, id);
+    setForm(next && next !== arch ? { model: id, ...sizeForArch(form.width, form.height, next) } : { model: id });
+  };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && canGenerate) {
@@ -71,20 +104,29 @@ export function ImagePanel({ form, setForm, checkpoints, samplers, onGenerate, s
         </div>
 
         <Section label="Model">
-          <select className="select" value={form.model} onChange={(e) => setForm({ model: e.target.value })}>
-            {sdxl.length === 0 && <option value="">No SDXL checkpoints found</option>}
-            {sdxl.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
+          <select className="select" value={form.model} onChange={(e) => selectModel(e.target.value)}>
+            {supported.length === 0 && <option value="">No supported checkpoints found</option>}
+            {SUPPORTED_ARCHS.map((a) => {
+              const group = supported.filter((c) => c.arch === a);
+              return (
+                group.length > 0 && (
+                  <optgroup key={a} label={ARCH_LABELS[a]}>
+                    {group.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )
+              );
+            })}
           </select>
-          {otherCount > 0 && <p className="hint">{otherCount} SD 1.5 checkpoints found — not supported yet.</p>}
+          <p className="hint">{ARCH_LABELS[arch]} · native {arch === "sdxl" ? "1024" : "512"} px</p>
         </Section>
 
         <Section label="Aspect ratio">
           <div className="aspect-grid">
-            {ASPECTS.map((a) => {
+            {ASPECTS[arch].map((a) => {
               const active = a.w === form.width && a.h === form.height;
               const scale = 18 / Math.max(a.w, a.h);
               return (
@@ -161,7 +203,7 @@ export function ImagePanel({ form, setForm, checkpoints, samplers, onGenerate, s
                   </button>
                 ))}
               </div>
-              <p className="hint">1 is the standard SDXL setting.</p>
+              <p className="hint">1 is standard. Many anime-style SD 1.5 models are tuned for 2.</p>
             </Section>
           </div>
         )}

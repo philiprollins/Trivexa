@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, isActive, type Asset, type Checkpoint, type Job, type Sampler, type Status } from "./api";
 import { AssetsPanel, type Selection } from "./components/AssetsPanel";
 import { Rail, TopBar } from "./components/Chrome";
-import { ImagePanel, type ImageForm } from "./components/ImagePanel";
+import { ImagePanel, SUPPORTED_ARCHS, sizeForArch, type ImageForm } from "./components/ImagePanel";
 import { Viewer } from "./components/Viewer";
 import { useJobs } from "./useJobs";
 
@@ -81,8 +81,15 @@ export default function App() {
   useEffect(() => {
     api.models().then(({ checkpoints }) => {
       setCheckpoints(checkpoints);
-      const sdxl = checkpoints.filter((c) => c.arch === "sdxl");
-      setFormState((f) => (sdxl.some((c) => c.id === f.model) ? f : { ...f, model: sdxl[0]?.id ?? "" }));
+      setFormState((f) => {
+        if (checkpoints.some((c) => c.id === f.model && (SUPPORTED_ARCHS as string[]).includes(c.arch))) return f;
+        // Default to the first SDXL checkpoint, falling back to SD 1.5.
+        for (const arch of SUPPORTED_ARCHS) {
+          const first = checkpoints.find((c) => c.arch === arch);
+          if (first) return { ...f, model: first.id, ...sizeForArch(f.width, f.height, arch) };
+        }
+        return { ...f, model: "" };
+      });
     }, (e) => notify(`Could not load models: ${e.message}`, true));
     api.samplers().then(({ samplers }) => setSamplers(samplers));
   }, [notify]);
