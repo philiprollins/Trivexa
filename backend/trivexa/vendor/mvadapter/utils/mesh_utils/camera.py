@@ -5,6 +5,7 @@ from typing import List, Optional, Union
 import numpy as np
 import torch
 import torch.nn.functional as F
+import trimesh
 from PIL import Image
 from torch import BoolTensor, FloatTensor
 

@@ -12,3 +12,8 @@ Only the files needed for inference are included; local edits are marked `# Triv
 Weights are not vendored: MV-Adapter adapters are downloaded to `data/models/mv-adapter/`,
 BiRefNet weights are read from `<models dir>/background_removal/birefnet.safetensors`.
 TripoSR weights (`config.yaml`, `model.ckpt`, `dino/config.json` from `stabilityai/TripoSR`) are read from `<models dir>/triposr/`.
+
+`mvadapter/` includes the texture pipeline (`pipelines/pipeline_texture.py`, `utils/mesh_utils/`) for the upstream
+texture baker. It needs the optional `texture` dependencies; `mesh_utils/__init__.py` is kept empty so the camera
+helpers used elsewhere import without them. nvdiffrast (installed, not vendored) is under the NVIDIA Source Code
+License, which allows non-commercial use only.
