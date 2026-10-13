@@ -4,7 +4,7 @@ import { Logo } from "./Logo";
 
 const GB = 1024 ** 3;
 
-export type Tool = "image" | "multiview";
+export type Tool = "image" | "multiview" | "model3d";
 
 export function TopBar(props: { tool: Tool; status: Status | null; connected: boolean; onUnload: () => void }) {
   const { status, connected, onUnload } = props;
@@ -41,7 +41,7 @@ export function TopBar(props: { tool: Tool; status: Status | null; connected: bo
 const TOOLS = [
   { id: "image", label: "Image", icon: ImageIcon, enabled: true },
   { id: "multiview", label: "Multiview", icon: Layers, enabled: true },
-  { id: "model", label: "3D Model", icon: Box, enabled: false },
+  { id: "model3d", label: "3D Model", icon: Box, enabled: true },
   { id: "texture", label: "Texture", icon: PaintBucket, enabled: false },
 ];
 

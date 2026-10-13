@@ -12,6 +12,7 @@ import {
 import { AssetsPanel, type Selection } from "./components/AssetsPanel";
 import { Rail, TopBar, type Tool } from "./components/Chrome";
 import { ImagePanel, SUPPORTED_ARCHS, sizeForArch, type ImageForm } from "./components/ImagePanel";
+import { Model3DPanel, type Model3DForm, type Source3D } from "./components/Model3DPanel";
 import { MODE_CFG, MultiviewPanel, type MultiviewForm, type Reference } from "./components/MultiviewPanel";
 import { Viewer } from "./components/Viewer";
 import { useJobs } from "./useJobs";
@@ -48,6 +49,8 @@ const DEFAULT_MV_FORM: MultiviewForm = {
   removeBg: true,
   referenceScale: 1,
 };
+
+const DEFAULT_3D_FORM: Model3DForm = { removeBg: true, foregroundRatio: 0.85, resolution: 256 };
 
 /** Form state remembered per browser; storage failures just mean defaults next time. */
 function usePersistentForm<T extends object>(key: string, defaults: T) {
@@ -92,6 +95,9 @@ export default function App() {
   const [mvForm, setMvForm, setMvFormState] = usePersistentForm<MultiviewForm>("trivexa.multiviewForm", DEFAULT_MV_FORM);
   const [reference, setReference] = useState<Reference | null>(null);
   const [mvSupport, setMvSupport] = useState<MultiviewSupport | null>(null);
+  const [form3d, setForm3d] = usePersistentForm<Model3DForm>("trivexa.model3dForm", DEFAULT_3D_FORM);
+  const [source3d, setSource3d] = useState<Source3D | null>(null);
+  const [tripoAvailable, setTripoAvailable] = useState(false);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [samplers, setSamplers] = useState<Sampler[]>([]);
   const [status, setStatus] = useState<Status | null>(null);
@@ -124,9 +130,10 @@ export default function App() {
 
   // Re-checked when switching tools, so newly downloaded adapter weights show up without a reload.
   useEffect(() => {
-    api.models().then(({ checkpoints, multiview }) => {
+    api.models().then(({ checkpoints, multiview, model3d }) => {
       setCheckpoints(checkpoints);
       setMvSupport(multiview);
+      setTripoAvailable(model3d.triposr);
       const firstSdxl = checkpoints.find((c) => c.arch === "sdxl")?.id ?? "";
       setMvFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
       setFormState((f) => {
@@ -217,6 +224,42 @@ export default function App() {
     }
   };
 
+  const generate3d = async () => {
+    if (!source3d) return;
+    setSubmitting(true);
+    try {
+      const { jobs: created } = await api.generate3d({
+        source_asset: source3d.type === "asset" ? source3d.asset.id : null,
+        source_view: source3d.type === "asset" ? source3d.view : 0,
+        source_image: source3d.type === "upload" ? source3d.dataUrl : null,
+        remove_bg: form3d.removeBg,
+        foreground_ratio: form3d.foregroundRatio,
+        mc_resolution: form3d.resolution,
+      });
+      if (created[0]) setSelection({ kind: "job", id: created[0].id });
+      setTab("assets");
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const make3D = (a: Asset) => {
+    setSource3d({ type: "asset", asset: a, view: 0 });
+    setTool("model3d");
+  };
+
+  // The 3D viewer renders a proper thumbnail the first time a model is opened.
+  const saveModelSnapshot = async (a: Asset, dataUrl: string) => {
+    try {
+      const updated = await api.setThumbnail(a.id, dataUrl);
+      setAssets((list) => list.map((x) => (x.id === a.id ? updated : x)));
+    } catch {
+      /* keep the input-image thumbnail */
+    }
+  };
+
   const makeMultiview = (a: Asset) => {
     setReference({ type: "asset", asset: a });
     setMvForm({ mode: "i2mv", cfg: mvForm.mode === "i2mv" ? mvForm.cfg : MODE_CFG.i2mv });
@@ -235,7 +278,8 @@ export default function App() {
   };
 
   const deleteAsset = async (a: Asset) => {
-    if (!confirm(a.kind === "multiview" ? "Delete these views from disk?" : "Delete this image from disk?")) return;
+    const what = { image: "this image", multiview: "these views", model3d: "this 3D model" }[a.kind];
+    if (!confirm(`Delete ${what} from disk?`)) return;
     try {
       await api.deleteAsset(a.id);
       const idx = assets.findIndex((x) => x.id === a.id);
@@ -319,7 +363,20 @@ export default function App() {
       />
       <div className="workspace">
         <Rail active={tool} onSelect={setTool} />
-        {tool === "image" ? (
+        {tool === "model3d" ? (
+          <Model3DPanel
+            form={form3d}
+            setForm={setForm3d}
+            source={source3d}
+            setSource={setSource3d}
+            selected={selectedAsset}
+            available={tripoAvailable}
+            bgAvailable={mvSupport?.bg_removal ?? false}
+            onGenerate={generate3d}
+            submitting={submitting}
+            notify={notify}
+          />
+        ) : tool === "image" ? (
           <ImagePanel
             form={form}
             setForm={setForm}
@@ -352,6 +409,8 @@ export default function App() {
           onDelete={deleteAsset}
           onReuse={reuse}
           onMakeMultiview={makeMultiview}
+          onMake3D={make3D}
+          onModelSnapshot={saveModelSnapshot}
           notify={notify}
         />
         <AssetsPanel

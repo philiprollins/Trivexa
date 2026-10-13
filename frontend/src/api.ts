@@ -43,9 +43,20 @@ export interface MultiviewParams {
   sampler_label?: string;
 }
 
+export interface Model3DParams {
+  source_asset?: string | null;
+  source_view?: number;
+  remove_bg: boolean;
+  foreground_ratio: number;
+  mc_resolution: number;
+  engine: string;
+  vertices?: number;
+  faces?: number;
+}
+
 export interface Asset {
   id: string;
-  kind: "image" | "multiview";
+  kind: "image" | "multiview" | "model3d";
   created_at: number;
   file: string;
   url: string;
@@ -56,19 +67,22 @@ export interface Asset {
   negative: string;
   model: string;
   seed: number;
-  params: ImageParams & Partial<MultiviewParams>;
+  params: ImageParams & Partial<MultiviewParams> & Partial<Model3DParams>;
   favorite: boolean;
   parent_id: string | null;
   views?: { azimuth: number; url: string }[];
   reference_url?: string;
+  model_urls?: { glb: string; obj: string };
+  input_url?: string;
+  thumb_rendered?: boolean;
 }
 
 export type JobStatus = "queued" | "loading" | "running" | "done" | "error" | "cancelled";
 
 export interface Job {
   id: string;
-  kind: "image" | "multiview";
-  params: ImageParams & Partial<MultiviewParams>;
+  kind: "image" | "multiview" | "model3d";
+  params: ImageParams & Partial<MultiviewParams> & Partial<Model3DParams>;
   status: JobStatus;
   step: number;
   total: number;
@@ -122,12 +136,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   status: () => request<Status>("/api/status"),
   unload: () => request("/api/unload", { method: "POST" }),
-  models: () => request<{ checkpoints: Checkpoint[]; multiview: MultiviewSupport }>("/api/models"),
+  models: () =>
+    request<{ checkpoints: Checkpoint[]; multiview: MultiviewSupport; model3d: { triposr: boolean } }>("/api/models"),
   samplers: () => request<{ samplers: Sampler[] }>("/api/samplers"),
   generateImage: (params: Omit<ImageParams, "model_name" | "sampler_label" | "arch"> & { count: number }) =>
     request<{ jobs: Job[] }>("/api/generate/image", { method: "POST", body: JSON.stringify(params) }),
   generateMultiview: (params: MultiviewRequest) =>
     request<{ jobs: Job[] }>("/api/generate/multiview", { method: "POST", body: JSON.stringify(params) }),
+  generate3d: (params: {
+    source_asset?: string | null;
+    source_view?: number;
+    source_image?: string | null;
+    remove_bg: boolean;
+    foreground_ratio: number;
+    mc_resolution: number;
+  }) => request<{ jobs: Job[] }>("/api/generate/3d", { method: "POST", body: JSON.stringify(params) }),
+  setThumbnail: (id: string, image: string) =>
+    request<Asset>(`/api/assets/${id}/thumbnail`, { method: "POST", body: JSON.stringify({ image }) }),
   cancelJob: (id: string) => request(`/api/jobs/${id}/cancel`, { method: "POST" }),
   assets: (opts: { favorite?: boolean; limit?: number; offset?: number } = {}) => {
     const q = new URLSearchParams();

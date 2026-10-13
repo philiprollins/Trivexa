@@ -62,6 +62,7 @@ export function AssetsPanel(p: Props) {
                 >
                   <img src={a.thumb_url} alt={a.prompt} loading="lazy" />
                   {a.kind === "multiview" && <span className="tile-badge">MV</span>}
+                  {a.kind === "model3d" && <span className="tile-badge">3D</span>}
                   <button
                     className={`tile-star ${a.favorite ? "on" : ""}`}
                     onClick={(e) => {
@@ -97,6 +98,7 @@ export function AssetsPanel(p: Props) {
 function Details({ asset }: { asset: Asset | null }) {
   if (!asset) return <p className="hint center">Select an asset to see its settings.</p>;
   const pr = asset.params;
+  if (asset.kind === "model3d") return <Model3DDetails asset={asset} />;
   const mv = asset.kind === "multiview";
   const rows: [string, string | number][] = [
     ...(mv ? ([["Type", pr.mode === "i2mv" ? "Image → multiview" : "Text → multiview"]] as [string, string][]) : []),
@@ -140,6 +142,42 @@ function Details({ asset }: { asset: Asset | null }) {
       <div className="detail-block">
         <div className="section-label">File</div>
         <p className="detail-text mono">{asset.file}</p>
+      </div>
+    </div>
+  );
+}
+
+function Model3DDetails({ asset }: { asset: Asset }) {
+  const pr = asset.params;
+  const rows: [string, string | number][] = [
+    ["Engine", "TripoSR"],
+    ["Faces", pr.faces?.toLocaleString() ?? "—"],
+    ["Vertices", pr.vertices?.toLocaleString() ?? "—"],
+    ["Mesh resolution", pr.mc_resolution ?? "—"],
+    ["Subject fill", pr.foreground_ratio ?? "—"],
+    ["Background", pr.remove_bg ? "Removed" : "Kept"],
+    ["Created", new Date(asset.created_at * 1000).toLocaleString()],
+  ];
+  return (
+    <div className="details">
+      {asset.input_url && (
+        <div className="detail-block">
+          <div className="section-label">Input</div>
+          <img className="detail-input" src={asset.input_url} alt="Input" />
+        </div>
+      )}
+      <dl className="detail-table">
+        {rows.map(([k, v]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="detail-block">
+        <div className="section-label">Files</div>
+        <p className="detail-text mono">{asset.model_urls?.glb.replace("/files/", "")}</p>
+        <p className="detail-text mono">{asset.model_urls?.obj.replace("/files/", "")}</p>
       </div>
     </div>
   );

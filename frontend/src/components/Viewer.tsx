@@ -1,6 +1,12 @@
-import { Copy, Download, ExternalLink, Layers, RotateCcw, Star, Trash2, X } from "lucide-react";
+import { Box, Copy, Download, ExternalLink, Layers, RotateCcw, Rotate3d, Star, Trash2, X } from "lucide-react";
+import { lazy, Suspense, useState } from "react";
 import type { Asset, Job } from "../api";
+import { Segmented } from "./controls";
 import { Logo } from "./Logo";
+import type { RenderMode } from "./ModelViewer";
+
+// three.js is large; load it only when a 3D model is first shown.
+const ModelViewer = lazy(() => import("./ModelViewer").then((m) => ({ default: m.ModelViewer })));
 
 interface Props {
   asset: Asset | null;
@@ -11,14 +17,21 @@ interface Props {
   onDelete: (a: Asset) => void;
   onReuse: (a: Asset) => void;
   onMakeMultiview: (a: Asset) => void;
+  onMake3D: (a: Asset) => void;
+  onModelSnapshot: (a: Asset, dataUrl: string) => void;
   notify: (msg: string) => void;
 }
 
 const VIEW_NAMES: Record<number, string> = { 0: "Front", 90: "Right", 180: "Back", 270: "Left" };
 
-export function Viewer({ asset, job, queuePosition, onCancel, onToggleFavorite, onDelete, onReuse, onMakeMultiview, notify }: Props) {
+export function Viewer(props: Props) {
+  const { asset, job, queuePosition, onCancel, onToggleFavorite, onDelete, onReuse, onMakeMultiview, onMake3D, notify } = props;
+  const [renderMode, setRenderMode] = useState<RenderMode>("color");
+  const [autoRotate, setAutoRotate] = useState(true);
+
   if (job && job.status !== "done") {
-    const [width, height] = job.kind === "multiview" ? [3, 2] : [job.params.width, job.params.height];
+    const [width, height] =
+      job.kind === "multiview" ? [3, 2] : job.kind === "model3d" ? [1, 1] : [job.params.width, job.params.height];
     const pct = job.total ? Math.round((job.step / job.total) * 100) : 0;
     return (
       <main className="viewer">
@@ -27,11 +40,9 @@ export function Viewer({ asset, job, queuePosition, onCancel, onToggleFavorite, 
             {job.preview && <img src={job.preview} alt="" className="preview-img" />}
             <div className="pending-overlay">
               {job.status === "queued" && <span>Queued{queuePosition > 0 ? ` · #${queuePosition}` : ""}</span>}
-              {job.status === "loading" && <span>{job.kind === "multiview" ? "Preparing…" : "Loading model…"}</span>}
+              {job.status === "loading" && <span>{job.kind === "image" ? "Loading model…" : "Preparing…"}</span>}
               {job.status === "running" && (
-                <span>
-                  Step {job.step} / {job.total}
-                </span>
+                <span>{job.kind === "model3d" ? ["Encoding image…", "Extracting mesh…", "Saving…"][job.step - 1] : `Step ${job.step} / ${job.total}`}</span>
               )}
               {job.status === "error" && <span className="error-text">Failed: {job.error}</span>}
               {job.status === "cancelled" && <span>Cancelled</span>}
@@ -45,7 +56,7 @@ export function Viewer({ asset, job, queuePosition, onCancel, onToggleFavorite, 
         </div>
         <div className="toolbar">
           <p className="toolbar-prompt" title={job.params.prompt}>
-            {job.params.prompt || (job.kind === "multiview" ? "Multiview from image" : "")}
+            {job.params.prompt || (job.kind === "multiview" ? "Multiview from image" : job.kind === "model3d" ? "3D model from image" : "")}
           </p>
           {(job.status === "queued" || job.status === "loading" || job.status === "running") && (
             <button className="tool-btn" onClick={() => onCancel(job.id)}>
@@ -81,7 +92,36 @@ export function Viewer({ asset, job, queuePosition, onCancel, onToggleFavorite, 
   return (
     <main className="viewer">
       <div className="stage">
-        {asset.kind === "multiview" && asset.views ? (
+        {asset.kind === "model3d" && asset.model_urls ? (
+          <div className="frame model-frame">
+            <Suspense fallback={null}>
+              <ModelViewer
+                url={asset.model_urls.glb}
+                mode={renderMode}
+                autoRotate={autoRotate}
+                onSnapshot={asset.thumb_rendered ? undefined : (dataUrl) => props.onModelSnapshot(asset, dataUrl)}
+              />
+            </Suspense>
+            <div className="model-controls">
+              <Segmented
+                options={[
+                  { value: "color", label: "Color" },
+                  { value: "clay", label: "Clay" },
+                  { value: "wireframe", label: "Wire" },
+                ]}
+                value={renderMode}
+                onChange={setRenderMode}
+              />
+              <button
+                className={`icon-btn ${autoRotate ? "active" : ""}`}
+                onClick={() => setAutoRotate((v) => !v)}
+                title={autoRotate ? "Stop rotating" : "Auto-rotate"}
+              >
+                <Rotate3d size={16} />
+              </button>
+            </div>
+          </div>
+        ) : asset.kind === "multiview" && asset.views ? (
           <div className="frame mv-frame">
             <div className="mv-grid">
               {asset.views.map((v) => (
@@ -101,35 +141,59 @@ export function Viewer({ asset, job, queuePosition, onCancel, onToggleFavorite, 
         )}
       </div>
       <div className="toolbar">
-        {asset.reference_url && (
-          <a href={asset.reference_url} target="_blank" rel="noreferrer" className="toolbar-ref" title="Reference used (open full size)">
-            <img src={asset.reference_url} alt="Reference" />
+        {(asset.reference_url || asset.input_url) && (
+          <a href={(asset.reference_url || asset.input_url)!} target="_blank" rel="noreferrer" className="toolbar-ref" title="Reference used (open full size)">
+            <img src={(asset.reference_url || asset.input_url)!} alt="Reference" />
           </a>
         )}
         <p className="toolbar-prompt" title={asset.prompt}>
-          {asset.prompt || (asset.kind === "multiview" ? "Multiview from image" : "")}
+          {asset.kind === "model3d"
+            ? `3D model · ${asset.params.faces?.toLocaleString() ?? "?"} faces`
+            : asset.prompt || (asset.kind === "multiview" ? "Multiview from image" : "")}
         </p>
         <div className="toolbar-actions">
           <button className={`tool-btn ${asset.favorite ? "fav" : ""}`} onClick={() => onToggleFavorite(asset)} title="Favorite">
             <Star size={15} fill={asset.favorite ? "currentColor" : "none"} />
           </button>
-          <button className="tool-btn" onClick={() => copy(asset.prompt, "Prompt")} title="Copy prompt">
-            <Copy size={15} />
-          </button>
+          {asset.prompt && (
+            <button className="tool-btn" onClick={() => copy(asset.prompt, "Prompt")} title="Copy prompt">
+              <Copy size={15} />
+            </button>
+          )}
           {asset.kind === "image" && (
             <button className="tool-btn" onClick={() => onMakeMultiview(asset)} title="Generate multi-view images of this">
               <Layers size={15} /> Multiview
             </button>
           )}
-          <button className="tool-btn" onClick={() => onReuse(asset)} title="Load these settings into the panel">
-            <RotateCcw size={15} /> Reuse
-          </button>
-          <a className="tool-btn" href={asset.url} download title={asset.kind === "multiview" ? "Download grid PNG" : "Download PNG"}>
-            <Download size={15} />
-          </a>
-          <a className="tool-btn" href={asset.url} target="_blank" rel="noreferrer" title="Open full size">
-            <ExternalLink size={15} />
-          </a>
+          {(asset.kind === "image" || asset.kind === "multiview") && (
+            <button className="tool-btn" onClick={() => onMake3D(asset)} title="Reconstruct a 3D model from this">
+              <Box size={15} /> 3D
+            </button>
+          )}
+          {asset.kind !== "model3d" && (
+            <button className="tool-btn" onClick={() => onReuse(asset)} title="Load these settings into the panel">
+              <RotateCcw size={15} /> Reuse
+            </button>
+          )}
+          {asset.kind === "model3d" && asset.model_urls ? (
+            <>
+              <a className="tool-btn" href={asset.model_urls.glb} download title="Download GLB (vertex colours)">
+                <Download size={15} /> GLB
+              </a>
+              <a className="tool-btn" href={asset.model_urls.obj} download title="Download OBJ (vertex colours)">
+                <Download size={15} /> OBJ
+              </a>
+            </>
+          ) : (
+            <a className="tool-btn" href={asset.url} download title={asset.kind === "multiview" ? "Download grid PNG" : "Download PNG"}>
+              <Download size={15} />
+            </a>
+          )}
+          {asset.kind !== "model3d" && (
+            <a className="tool-btn" href={asset.url} target="_blank" rel="noreferrer" title="Open full size">
+              <ExternalLink size={15} />
+            </a>
+          )}
           <button className="tool-btn danger" onClick={() => onDelete(asset)} title="Delete">
             <Trash2 size={15} />
           </button>
