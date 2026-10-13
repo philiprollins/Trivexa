@@ -1,0 +1,19 @@
+# Generated images, SQLite DB and fetched model configs — local only
+data/
+
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Local env / editor noise
+.env
+.env.*
+.vscode/
+.idea/
+.DS_Store
