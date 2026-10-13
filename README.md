@@ -14,8 +14,9 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
   and small props.
 - **Texture**: gives a 3D model a proper UV texture from a reference image (by default the image it was made from):
   MV-Adapter's geometry-guided `ig2mv` generates six views (incl. top/bottom) conditioned on the mesh's position
-  and normal maps, which are projected and baked into a 1K–4K texture (~80 s). Output: textured GLB, OBJ zip
-  (OBJ + MTL + PNG) and the texture PNG.
+  and normal maps, which are baked into a 1K–4K texture (~75 s). Output: textured GLB, OBJ zip (OBJ + MTL + PNG)
+  and the texture PNG. Two bakers, chosen in `settings.toml`: MV-Adapter's own pipeline (default) or Trivexa's
+  lean fallback — see below.
 
 ## Run
 
@@ -34,7 +35,19 @@ tg2mv is optional, for prompt-only texturing later). Download or resume them wit
 cd backend && uv run python -m trivexa.download        # or: ... download t2mv i2mv ig2mv tg2mv
 ```
 
-Files are pinned to a specific revision and checked against their published SHA-256.
+Files are pinned to a specific revision and checked against their published SHA-256. `esrgan` and `lama`
+(RealESRGAN x2 and LaMa, 261 MB) are the upstream texture baker's view upscaler and inpainter.
+
+### Settings
+
+`settings.toml` (repo root; `TRIVEXA_SETTINGS` points elsewhere) holds options that need a restart:
+
+- `[texture] baker = "upstream" | "lean"` — MV-Adapter's texture pipeline (UVAtlas, RealESRGAN, LaMa view
+  inpainting; best quality, ~5 s, ~12 GB VRAM while baking) or Trivexa's lean baker (xatlas + OpenGL projection;
+  ~15–25 s, < 3 GB, no extra dependencies). "upstream" needs the `texture` extra (`uv sync --extra texture`,
+  which compiles nvdiffrast and so needs the CUDA toolkit; `run.sh` does this) and the `esrgan`/`lama` weights;
+  if either is missing Trivexa falls back to "lean" and the Texture panel says why. A side-by-side benchmark
+  of both is in `data/benchmarks/texture-2026-10-12/` (local only).
 Background removal reads `background_removal/birefnet.safetensors` from the models folder, and TripoSR reads
 `triposr/` (`config.yaml`, `model.ckpt`, `dino/config.json` from `stabilityai/TripoSR`).
 
@@ -72,7 +85,8 @@ backend/trivexa/
   engines/multiview.py  MV-Adapter text/image-to-multiview on an SDXL checkpoint
   engines/bg_removal.py BiRefNet foreground extraction
   engines/triposr.py    TripoSR image-to-mesh
-  engines/texture.py    UV unwrap (xatlas), headless OpenGL rasterisation (moderngl/EGL), view projection + baking
+  engines/texture.py    ig2mv condition maps (headless OpenGL via moderngl/EGL) + the lean baker (xatlas, projection)
+  engines/texture_upstream.py  MV-Adapter's texture pipeline (vendored) as the default baker
   download.py      resumable, checksum-verified weight downloads
   vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR); see vendor/README.md
 frontend/src/      React UI (Vite)
@@ -85,8 +99,7 @@ frontend/src/      React UI (Vite)
   at a time, so switching models reloads (~3s SD 1.5, ~15s SDXL).
 - CLIP skip 1 is each architecture's standard layer (last for SD 1.5, penultimate for SDXL); 2 matches A1111's
   "CLIP skip 2" on SD 1.5.
-- Texturing replaces MV-Adapter's own texture pipeline (nvdiffrast, CV-CUDA, open3d, LaMa, RealESRGAN) with a
-  lean baker: texels no view sees keep the mesh's vertex colours. Meshes are expected to face +Z (glTF front);
+- Texturing: meshes are expected to face +Z (glTF front);
   the Texture panel can turn a model that faces another way. TripoSR models made before this was fixed face -Z
   and default to a half turn.
 - Prompts longer than 77 tokens are encoded in chunks rather than truncated. `(word:1.2)` weighting syntax is not parsed yet.
