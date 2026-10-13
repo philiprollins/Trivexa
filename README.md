@@ -1,6 +1,6 @@
 # Trivexa
 
-A local image, multi-view (and, soon, 3D) generation studio. Runs entirely on this machine: a FastAPI server does inference with PyTorch/diffusers and serves a React UI.
+A local image, multi-view and 3D generation studio. Runs entirely on this machine: a FastAPI server does inference with PyTorch/diffusers and serves a React UI.
 
 ## Tools
 
@@ -8,6 +8,10 @@ A local image, multi-view (and, soon, 3D) generation studio. Runs entirely on th
 - **Multiview**: six consistent 768 px views (front, 45°, right, back, left, 315°) of one subject using
   [MV-Adapter](https://github.com/huanngzh/MV-Adapter) on an SDXL checkpoint, either from text or from a
   reference image (background removed with BiRefNet). Any gallery image has a *Multiview* button.
+- **3D Model**: single-image reconstruction with [TripoSR](https://github.com/VAST-AI-Research/TripoSR)
+  (~2 s per mesh, vertex colours) from an upload, a gallery image or any view of a multiview set. Models open
+  in an orbit viewer (colour / clay / wireframe) and download as GLB or OBJ. Rough, but fine for prototypes
+  and small props.
 
 ## Run
 
@@ -26,7 +30,8 @@ cd backend && uv run python -m trivexa.download        # or: ... download t2mv /
 ```
 
 Files are pinned to a specific revision and checked against their published SHA-256.
-Background removal reads `background_removal/birefnet.safetensors` from the models folder.
+Background removal reads `background_removal/birefnet.safetensors` from the models folder, and TripoSR reads
+`triposr/` (`config.yaml`, `model.ckpt`, `dino/config.json` from `stabilityai/TripoSR`).
 
 ### Dev mode (hot reload)
 
@@ -42,6 +47,7 @@ cd frontend && npm run dev     # → http://localhost:5173 (proxies /api and /fi
 | Model files (read-only) | `~/ComfyUI/models` — override with `TRIVEXA_MODELS_DIR` |
 | Generated images | `data/outputs/images/YYYY-MM-DD/*.png` (settings embedded as PNG text chunks) |
 | Multi-view sets | `data/outputs/multiview/YYYY-MM-DD/<id>/` (`view_000.png` … `view_315.png`, `grid.png`, `reference.png`) |
+| 3D models | `data/outputs/models3d/YYYY-MM-DD/<id>/` (`model.glb`, `model.obj`, `input.png`) |
 | Downloaded weights | `data/models/` (MV-Adapter) |
 | Thumbnails | `data/outputs/thumbs/` |
 | Asset database | `data/trivexa.db` (SQLite) |
@@ -60,8 +66,9 @@ backend/trivexa/
   engines/diffusion.py  SDXL + SD 1.5 pipelines (single-file checkpoints, long-prompt chunking, live previews)
   engines/multiview.py  MV-Adapter text/image-to-multiview on an SDXL checkpoint
   engines/bg_removal.py BiRefNet foreground extraction
+  engines/triposr.py    TripoSR image-to-mesh
   download.py      resumable, checksum-verified weight downloads
-  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet); see vendor/README.md
+  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR); see vendor/README.md
 frontend/src/      React UI (Vite)
 ```
 
@@ -74,6 +81,7 @@ frontend/src/      React UI (Vite)
   "CLIP skip 2" on SD 1.5.
 - Prompts longer than 77 tokens are encoded in chunks rather than truncated. `(word:1.2)` weighting syntax is not parsed yet.
 - The SDXL VAE decodes in bf16 to avoid the fp16 NaN issue without the fp32 memory spike.
-- Image and multiview pipelines are never on the GPU together; switching tools reloads (~8 s for MV-Adapter).
+- Only one large pipeline (image, multiview or 3D) is on the GPU at a time; switching tools reloads
+  (~8 s for MV-Adapter, ~3 s for TripoSR).
   Image-to-multiview peaks around 14.4 GB of VRAM (the text encoders are parked in system RAM while it denoises),
   so it is tight on a 16 GB card if anything else is using the GPU.
