@@ -14,6 +14,7 @@ import { Rail, TopBar, type Tool } from "./components/Chrome";
 import { ImagePanel, SUPPORTED_ARCHS, sizeForArch, type ImageForm } from "./components/ImagePanel";
 import { Model3DPanel, type Model3DForm, type Source3D } from "./components/Model3DPanel";
 import { MODE_CFG, MultiviewPanel, type MultiviewForm, type Reference } from "./components/MultiviewPanel";
+import { defaultFrontYaw, TexturePanel, type TextureForm, type TextureReference } from "./components/TexturePanel";
 import { Viewer } from "./components/Viewer";
 import { useJobs } from "./useJobs";
 
@@ -51,6 +52,20 @@ const DEFAULT_MV_FORM: MultiviewForm = {
 };
 
 const DEFAULT_3D_FORM: Model3DForm = { removeBg: true, foregroundRatio: 0.85, resolution: 256 };
+
+// Defaults from MV-Adapter's texture_i2tex script (CFG 3, 768 px views); 40 steps instead of 50 for speed.
+const DEFAULT_TEXTURE_FORM: TextureForm = {
+  prompt: "",
+  model: "",
+  removeBg: true,
+  steps: 40,
+  cfg: 3,
+  sampler: "euler",
+  seed: 0,
+  randomSeed: true,
+  referenceScale: 1,
+  uvSize: 2048,
+};
 
 /** Form state remembered per browser; storage failures just mean defaults next time. */
 function usePersistentForm<T extends object>(key: string, defaults: T) {
@@ -98,6 +113,15 @@ export default function App() {
   const [form3d, setForm3d] = usePersistentForm<Model3DForm>("trivexa.model3dForm", DEFAULT_3D_FORM);
   const [source3d, setSource3d] = useState<Source3D | null>(null);
   const [tripoAvailable, setTripoAvailable] = useState(false);
+  const [texForm, setTexForm, setTexFormState] = usePersistentForm<TextureForm>("trivexa.textureForm", DEFAULT_TEXTURE_FORM);
+  const [texModel, setTexModelState] = useState<Asset | null>(null);
+  const [texYaw, setTexYaw] = useState(0);
+  const [texReference, setTexReference] = useState<TextureReference | null>(null);
+  const setTexModel = useCallback((a: Asset | null) => {
+    setTexModelState(a);
+    setTexReference(null);
+    if (a) setTexYaw(defaultFrontYaw(a));
+  }, []);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [samplers, setSamplers] = useState<Sampler[]>([]);
   const [status, setStatus] = useState<Status | null>(null);
@@ -136,6 +160,7 @@ export default function App() {
       setTripoAvailable(model3d.triposr);
       const firstSdxl = checkpoints.find((c) => c.arch === "sdxl")?.id ?? "";
       setMvFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
+      setTexFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
       setFormState((f) => {
         if (checkpoints.some((c) => c.id === f.model && (SUPPORTED_ARCHS as string[]).includes(c.arch))) return f;
         // Default to the first SDXL checkpoint, falling back to SD 1.5.
@@ -146,7 +171,7 @@ export default function App() {
         return { ...f, model: "" };
       });
     }, (e) => notify(`Could not load models: ${e.message}`, true));
-  }, [notify, tool, setFormState, setMvFormState]);
+  }, [notify, tool, setFormState, setMvFormState, setTexFormState]);
 
   useEffect(() => {
     api.samplers().then(({ samplers }) => setSamplers(samplers));
@@ -243,6 +268,39 @@ export default function App() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const generateTexture = async () => {
+    if (!texModel) return;
+    setSubmitting(true);
+    try {
+      const { jobs: created } = await api.generateTexture({
+        source_asset: texModel.id,
+        model: texForm.model,
+        reference_asset: texReference?.type === "asset" ? texReference.asset.id : null,
+        reference_image: texReference?.type === "upload" ? texReference.dataUrl : null,
+        remove_bg: texForm.removeBg,
+        prompt: texForm.prompt || "high quality",
+        steps: texForm.steps,
+        cfg: texForm.cfg,
+        sampler: texForm.sampler,
+        seed: texForm.randomSeed ? -1 : texForm.seed,
+        reference_scale: texForm.referenceScale,
+        front_yaw: texYaw,
+        uv_size: texForm.uvSize,
+      });
+      if (created[0]) setSelection({ kind: "job", id: created[0].id });
+      setTab("assets");
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const makeTexture = (a: Asset) => {
+    setTexModel(a);
+    setTool("texture");
   };
 
   const make3D = (a: Asset) => {
@@ -363,7 +421,26 @@ export default function App() {
       />
       <div className="workspace">
         <Rail active={tool} onSelect={setTool} />
-        {tool === "model3d" ? (
+        {tool === "texture" ? (
+          <TexturePanel
+            form={texForm}
+            setForm={setTexForm}
+            model={texModel}
+            setModel={setTexModel}
+            frontYaw={texYaw}
+            setFrontYaw={setTexYaw}
+            reference={texReference}
+            setReference={setTexReference}
+            selected={selectedAsset}
+            checkpoints={checkpoints}
+            samplers={samplers}
+            available={mvSupport?.ig2mv ?? false}
+            bgAvailable={mvSupport?.bg_removal ?? false}
+            onGenerate={generateTexture}
+            submitting={submitting}
+            notify={notify}
+          />
+        ) : tool === "model3d" ? (
           <Model3DPanel
             form={form3d}
             setForm={setForm3d}
@@ -410,6 +487,7 @@ export default function App() {
           onReuse={reuse}
           onMakeMultiview={makeMultiview}
           onMake3D={make3D}
+          onTexture={makeTexture}
           onModelSnapshot={saveModelSnapshot}
           notify={notify}
         />

@@ -150,11 +150,22 @@ function Details({ asset }: { asset: Asset | null }) {
 function Model3DDetails({ asset }: { asset: Asset }) {
   const pr = asset.params;
   const rows: [string, string | number][] = [
-    ["Engine", "TripoSR"],
+    ["Engine", pr.textured ? "TripoSR + MV-Adapter texture" : "TripoSR"],
+    ...(pr.textured
+      ? ([
+          ["Texture", `${pr.uv_size} × ${pr.uv_size}`],
+          ["Base model", pr.model_name ?? pr.model ?? "—"],
+          ["Seed", pr.seed ?? "—"],
+        ] as [string, string | number][])
+      : []),
     ["Faces", pr.faces?.toLocaleString() ?? "—"],
     ["Vertices", pr.vertices?.toLocaleString() ?? "—"],
-    ["Mesh resolution", pr.mc_resolution ?? "—"],
-    ["Subject fill", pr.foreground_ratio ?? "—"],
+    ...(pr.textured
+      ? []
+      : ([
+          ["Mesh resolution", pr.mc_resolution ?? "—"],
+          ["Subject fill", pr.foreground_ratio ?? "—"],
+        ] as [string, string | number][])),
     ["Background", pr.remove_bg ? "Removed" : "Kept"],
     ["Created", new Date(asset.created_at * 1000).toLocaleString()],
   ];
@@ -162,8 +173,16 @@ function Model3DDetails({ asset }: { asset: Asset }) {
     <div className="details">
       {asset.input_url && (
         <div className="detail-block">
-          <div className="section-label">Input</div>
+          <div className="section-label">{pr.textured ? "Reference" : "Input"}</div>
           <img className="detail-input" src={asset.input_url} alt="Input" />
+        </div>
+      )}
+      {asset.image_urls?.views && (
+        <div className="detail-block">
+          <div className="section-label">Generated views</div>
+          <a href={asset.image_urls.views} target="_blank" rel="noreferrer">
+            <img className="detail-input" src={asset.image_urls.views} alt="Views" />
+          </a>
         </div>
       )}
       <dl className="detail-table">

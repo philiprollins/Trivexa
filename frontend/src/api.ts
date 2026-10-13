@@ -52,6 +52,10 @@ export interface Model3DParams {
   engine: string;
   vertices?: number;
   faces?: number;
+  front?: string; // "+z" when known to face +Z
+  textured?: boolean;
+  front_yaw?: number;
+  uv_size?: number;
 }
 
 export interface Asset {
@@ -74,6 +78,7 @@ export interface Asset {
   reference_url?: string;
   model_urls?: { glb: string; obj: string };
   input_url?: string;
+  image_urls?: { texture?: string; views?: string };
   thumb_rendered?: boolean;
 }
 
@@ -81,7 +86,7 @@ export type JobStatus = "queued" | "loading" | "running" | "done" | "error" | "c
 
 export interface Job {
   id: string;
-  kind: "image" | "multiview" | "model3d";
+  kind: "image" | "multiview" | "model3d" | "texture";
   params: ImageParams & Partial<MultiviewParams> & Partial<Model3DParams>;
   status: JobStatus;
   step: number;
@@ -105,6 +110,7 @@ export interface Status {
 export interface MultiviewSupport {
   t2mv: boolean;
   i2mv: boolean;
+  ig2mv: boolean;
   bg_removal: boolean;
 }
 
@@ -151,6 +157,21 @@ export const api = {
     foreground_ratio: number;
     mc_resolution: number;
   }) => request<{ jobs: Job[] }>("/api/generate/3d", { method: "POST", body: JSON.stringify(params) }),
+  generateTexture: (params: {
+    source_asset: string;
+    model: string;
+    reference_asset?: string | null;
+    reference_image?: string | null;
+    remove_bg: boolean;
+    prompt: string;
+    steps: number;
+    cfg: number;
+    sampler: string;
+    seed: number;
+    reference_scale: number;
+    front_yaw: number;
+    uv_size: number;
+  }) => request<{ jobs: Job[] }>("/api/generate/texture", { method: "POST", body: JSON.stringify(params) }),
   setThumbnail: (id: string, image: string) =>
     request<Asset>(`/api/assets/${id}/thumbnail`, { method: "POST", body: JSON.stringify({ image }) }),
   cancelJob: (id: string) => request(`/api/jobs/${id}/cancel`, { method: "POST" }),
