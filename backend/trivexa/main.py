@@ -1,15 +1,27 @@
-import logging
+import os
+
+# Long-running server alternating between large pipelines: avoid fragmentation-induced OOMs.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+import base64  # noqa: E402
+import binascii  # noqa: E402
+import io  # noqa: E402
+import logging  # noqa: E402
 import random
 from contextlib import asynccontextmanager
+from typing import Literal
 
 import torch
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from . import models
 from .config import CHECKPOINTS_DIR, FRONTEND_DIST, OUTPUTS_DIR, ensure_dirs
+from .engines.bg_removal import BackgroundRemover
 from .engines.diffusion import ARCHS, SAMPLERS, DiffusionEngine, GenParams
+from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
 from .jobs import Job, JobManager
 from .store import Store
 
@@ -20,6 +32,8 @@ ensure_dirs()
 store = Store()
 jobs = JobManager()
 diffusion = DiffusionEngine()
+multiview = MultiviewEngine()
+bg_remover = BackgroundRemover()
 
 
 @asynccontextmanager
@@ -43,18 +57,26 @@ def status():
         gpu = {"name": torch.cuda.get_device_name(0), "vram_free": free, "vram_total": total}
     return {
         "gpu": gpu,
-        "loaded_model": diffusion.model_path.name if diffusion.model_path else None,
-        "loaded_arch": diffusion.arch.id if diffusion.arch else None,
+        "loaded_model": _loaded_label(),
         "pending_jobs": jobs.pending,
         "models_dir": str(CHECKPOINTS_DIR.parent),
         "outputs_dir": str(OUTPUTS_DIR),
     }
 
 
+def _loaded_label() -> str | None:
+    if diffusion.model_path:
+        return diffusion.model_path.stem
+    if multiview.model_path:
+        return f"{multiview.model_path.stem} · MV-Adapter {multiview.mode}"
+    return None
+
+
 @app.post("/api/unload")
 def unload():
     with jobs.gpu_lock:
         diffusion.unload()
+        multiview.unload()
     return {"ok": True}
 
 
@@ -63,6 +85,11 @@ def list_models():
     return {
         "checkpoints": [c.to_dict() for c in models.list_checkpoints()],
         "archs": [{"id": a.id, "label": a.label} for a in ARCHS.values()],
+        "multiview": {
+            "t2mv": adapter_available("t2mv"),
+            "i2mv": adapter_available("i2mv"),
+            "bg_removal": bg_remover.available(),
+        },
     }
 
 
@@ -114,6 +141,7 @@ async def generate_image(req: ImageGenRequest):
 
 def _image_runner(model_path, params: dict):
     def run(job: Job) -> dict:
+        multiview.unload()  # only one large pipeline on the GPU at a time
         image = diffusion.generate(
             GenParams(
                 arch=params["arch"],
@@ -132,6 +160,104 @@ def _image_runner(model_path, params: dict):
             is_cancelled=job.cancel_requested.is_set,
         )
         return store.save_image(image, params)
+
+    return run
+
+
+class MultiviewGenRequest(BaseModel):
+    mode: Literal["t2mv", "i2mv"]
+    prompt: str = Field("", max_length=10_000)
+    negative: str = Field("watermark, ugly, deformed, noisy, blurry, low contrast", max_length=10_000)
+    model: str
+    steps: int = Field(40, ge=1, le=100)
+    cfg: float = Field(7.0, ge=1.0, le=20.0)
+    sampler: str = "euler"
+    seed: int = Field(-1, ge=-1, le=2**32 - 1)
+    count: int = Field(1, ge=1, le=8)
+    # i2mv: the reference is either an existing image asset or an uploaded image (data URL).
+    reference_asset: str | None = None
+    reference_image: str | None = Field(None, max_length=40_000_000)
+    remove_bg: bool = True
+    reference_scale: float = Field(1.0, ge=0.0, le=2.0)
+
+
+def _load_reference(req: MultiviewGenRequest) -> tuple[Image.Image, str | None]:
+    if req.reference_asset:
+        asset = store.get(req.reference_asset)
+        if not asset or asset["kind"] != "image":
+            raise HTTPException(400, "Reference asset not found")
+        return Image.open(OUTPUTS_DIR / asset["file"]).copy(), asset["id"]
+    if req.reference_image:
+        try:
+            _, b64 = req.reference_image.split(",", 1)
+            image = Image.open(io.BytesIO(base64.b64decode(b64)))
+            image.load()
+        except (ValueError, binascii.Error, UnidentifiedImageError, OSError) as e:
+            raise HTTPException(400, "Could not read the uploaded image") from e
+        return image, None
+    raise HTTPException(400, "Image-to-multiview needs a reference image")
+
+
+@app.post("/api/generate/multiview")
+async def generate_multiview(req: MultiviewGenRequest):
+    try:
+        model_path, _ = models.resolve_checkpoint(req.model, {"sdxl"})
+    except ValueError as e:
+        raise HTTPException(400, f"{e} (MV-Adapter needs an SDXL checkpoint)") from e
+    if req.sampler not in SAMPLERS:
+        raise HTTPException(400, f"Unknown sampler: {req.sampler}")
+    if not adapter_available(req.mode):
+        raise HTTPException(400, f"MV-Adapter weights for {req.mode} are not downloaded")
+    source, parent_id = None, None
+    if req.mode == "i2mv":
+        source, parent_id = _load_reference(req)
+        if req.remove_bg and not bg_remover.available():
+            raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
+    elif not req.prompt.strip():
+        raise HTTPException(400, "Text-to-multiview needs a prompt")
+
+    base_seed = random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed
+    created = []
+    for i in range(req.count):
+        params = req.model_dump(exclude={"count", "reference_image"}) | {
+            "seed": (base_seed + i) % 2**32,
+            "model_name": model_path.stem,
+            "sampler_label": SAMPLERS[req.sampler][0],
+            "arch": "sdxl",
+            "azimuths": AZIMUTHS,
+        }
+        if req.mode == "t2mv":
+            for k in ("reference_asset", "remove_bg", "reference_scale"):
+                params.pop(k)
+        job = Job(kind="multiview", params=params, run=_multiview_runner(model_path, params, source, parent_id))
+        created.append(jobs.submit(job).public())
+    return {"jobs": created}
+
+
+def _multiview_runner(model_path, params: dict, source: Image.Image | None, parent_id: str | None):
+    def run(job: Job) -> dict:
+        diffusion.unload()  # only one large pipeline on the GPU at a time
+        reference = None
+        if params["mode"] == "i2mv":
+            image = bg_remover.remove(source) if params["remove_bg"] else source
+            reference = prepare_reference(image)
+        views = multiview.generate(
+            MVParams(
+                mode=params["mode"],
+                model_path=model_path,
+                prompt=params["prompt"] or "high quality",
+                negative=params["negative"],
+                steps=params["steps"],
+                cfg=params["cfg"],
+                sampler=params["sampler"],
+                seed=params["seed"],
+                reference=reference,
+                reference_scale=params.get("reference_scale", 1.0),
+            ),
+            on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
+            is_cancelled=job.cancel_requested.is_set,
+        )
+        return store.save_multiview(views, AZIMUTHS, params, reference=reference, parent_id=parent_id)
 
     return run
 
