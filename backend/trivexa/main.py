@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from . import models
 from .config import CHECKPOINTS_DIR, FRONTEND_DIST, OUTPUTS_DIR, ensure_dirs
-from .engines.sdxl import SAMPLERS, SDXLEngine, SDXLParams
+from .engines.diffusion import ARCHS, SAMPLERS, DiffusionEngine, GenParams
 from .jobs import Job, JobManager
 from .store import Store
 
@@ -19,7 +19,7 @@ torch.backends.cuda.matmul.allow_tf32 = True
 ensure_dirs()
 store = Store()
 jobs = JobManager()
-sdxl = SDXLEngine()
+diffusion = DiffusionEngine()
 
 
 @asynccontextmanager
@@ -43,7 +43,8 @@ def status():
         gpu = {"name": torch.cuda.get_device_name(0), "vram_free": free, "vram_total": total}
     return {
         "gpu": gpu,
-        "loaded_model": sdxl.model_path.name if sdxl.model_path else None,
+        "loaded_model": diffusion.model_path.name if diffusion.model_path else None,
+        "loaded_arch": diffusion.arch.id if diffusion.arch else None,
         "pending_jobs": jobs.pending,
         "models_dir": str(CHECKPOINTS_DIR.parent),
         "outputs_dir": str(OUTPUTS_DIR),
@@ -53,13 +54,16 @@ def status():
 @app.post("/api/unload")
 def unload():
     with jobs.gpu_lock:
-        sdxl.unload()
+        diffusion.unload()
     return {"ok": True}
 
 
 @app.get("/api/models")
 def list_models():
-    return {"checkpoints": [c.to_dict() for c in models.list_checkpoints()]}
+    return {
+        "checkpoints": [c.to_dict() for c in models.list_checkpoints()],
+        "archs": [{"id": a.id, "label": a.label} for a in ARCHS.values()],
+    }
 
 
 @app.get("/api/samplers")
@@ -74,8 +78,8 @@ class ImageGenRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=10_000)
     negative: str = Field("", max_length=10_000)
     model: str
-    width: int = Field(1024, ge=512, le=2048, multiple_of=8)
-    height: int = Field(1024, ge=512, le=2048, multiple_of=8)
+    width: int = Field(1024, ge=256, le=2048, multiple_of=8)
+    height: int = Field(1024, ge=256, le=2048, multiple_of=8)
     steps: int = Field(28, ge=1, le=150)
     cfg: float = Field(6.0, ge=1.0, le=30.0)
     sampler: str = "euler_a"
@@ -87,7 +91,7 @@ class ImageGenRequest(BaseModel):
 @app.post("/api/generate/image")
 async def generate_image(req: ImageGenRequest):
     try:
-        model_path = models.resolve_checkpoint(req.model, "sdxl")
+        model_path, arch = models.resolve_checkpoint(req.model, set(ARCHS))
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     if req.sampler not in SAMPLERS:
@@ -102,7 +106,7 @@ async def generate_image(req: ImageGenRequest):
             "seed": seed,
             "model_name": model_path.stem,
             "sampler_label": SAMPLERS[req.sampler][0],
-            "arch": "sdxl",
+            "arch": arch,
         }
         created.append(jobs.submit(Job(kind="image", params=params, run=_image_runner(model_path, params))).public())
     return {"jobs": created}
@@ -110,8 +114,9 @@ async def generate_image(req: ImageGenRequest):
 
 def _image_runner(model_path, params: dict):
     def run(job: Job) -> dict:
-        image = sdxl.generate(
-            SDXLParams(
+        image = diffusion.generate(
+            GenParams(
+                arch=params["arch"],
                 model_path=model_path,
                 prompt=params["prompt"],
                 negative=params["negative"],
