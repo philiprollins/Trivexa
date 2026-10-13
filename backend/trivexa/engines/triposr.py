@@ -107,5 +107,7 @@ class TripoSREngine:
         if mesh.volume < 0:  # keep normals pointing outwards whatever the marching-cubes winding
             mesh.invert()
         mesh = to_gradio_3d_orientation(mesh)
+        # TripoSR's subject then faces -Z; turn it to face +Z, the glTF "front" (and what MV-Adapter expects).
+        mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [0, 1, 0]))
         on_step(3, 3, None)
         return mesh, cond
