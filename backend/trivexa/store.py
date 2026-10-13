@@ -63,6 +63,7 @@ class Store:
         if "model" in extra:
             d["model_urls"] = {fmt: f"/files/{rel}" for fmt, rel in extra["model"].items()}
             d["input_url"] = f"/files/{extra['input']}"
+            d["image_urls"] = {name: f"/files/{rel}" for name, rel in extra.get("images", {}).items()}
             d["thumb_rendered"] = extra.get("thumb_rendered", False)
             if d["thumb_rendered"]:
                 d["thumb_url"] += "?rendered"  # same file, new content: bust the browser cache
@@ -146,8 +147,16 @@ class Store:
         self._save_thumb(grid, rel_thumb)
         return self._insert(asset_id, "multiview", now, rel_file, rel_thumb, w, h, params, parent_id, extra)
 
-    def save_model3d(self, mesh, input_image: Image.Image, params: dict, parent_id: str | None = None) -> dict:
-        """GLB (for the viewer) and OBJ (for DCC tools) plus the processed input, one folder per model.
+    def save_model3d(
+        self,
+        mesh,
+        input_image: Image.Image,
+        params: dict,
+        parent_id: str | None = None,
+        images: dict[str, Image.Image] | None = None,
+    ) -> dict:
+        """GLB (for the viewer) and OBJ (for DCC tools; textured meshes also get .mtl + texture PNG) plus the
+        input image and any extra named images (e.g. a baked texture), one folder per model.
 
         The thumbnail starts as the input image; the UI replaces it with a render of the model (set_thumbnail).
         """
@@ -159,9 +168,17 @@ class Store:
             mesh.export(OUTPUTS_DIR / rel)
         rel_input = rel_dir / "input.png"
         input_image.save(OUTPUTS_DIR / rel_input)
+        rel_images = {}
+        for name, image in (images or {}).items():
+            rel_images[name] = (rel_dir / f"{name}.png").as_posix()
+            image.save(OUTPUTS_DIR / rel_images[name])
         rel_thumb = Path("thumbs") / day / f"{stem}_3d.webp"
         self._save_thumb(input_image, rel_thumb)
-        extra = {"model": {fmt: rel.as_posix() for fmt, rel in files.items()}, "input": rel_input.as_posix()}
+        extra = {
+            "model": {fmt: rel.as_posix() for fmt, rel in files.items()},
+            "input": rel_input.as_posix(),
+            "images": rel_images,
+        }
         params = params | {"vertices": len(mesh.vertices), "faces": len(mesh.faces)}
         return self._insert(asset_id, "model3d", now, files["glb"], rel_thumb, input_image.width, input_image.height,
                             params, parent_id, extra)
