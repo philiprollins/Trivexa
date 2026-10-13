@@ -1,0 +1,56 @@
+import { Box, Cpu, Image as ImageIcon, PaintBucket, Power } from "lucide-react";
+import type { Status } from "../api";
+import { Logo } from "./Logo";
+
+const GB = 1024 ** 3;
+
+export function TopBar({ status, connected, onUnload }: { status: Status | null; connected: boolean; onUnload: () => void }) {
+  const gpu = status?.gpu;
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <Logo />
+        <span>TRIVEXA</span>
+      </div>
+      <div className="workspace-pill">Image Workspace</div>
+      <div className="topbar-right">
+        {!connected && <span className="pill warn">Reconnecting…</span>}
+        {status && status.pending_jobs > 0 && <span className="pill">{status.pending_jobs} in queue</span>}
+        {status?.loaded_model && (
+          <span className="pill" title="Model loaded in VRAM">
+            {status.loaded_model.replace(/\.safetensors$/, "")}
+            <button className="pill-btn" onClick={onUnload} title="Unload model and free VRAM">
+              <Power size={12} />
+            </button>
+          </span>
+        )}
+        {gpu && (
+          <span className="pill" title={gpu.name}>
+            <Cpu size={13} />
+            {((gpu.vram_total - gpu.vram_free) / GB).toFixed(1)} / {(gpu.vram_total / GB).toFixed(0)} GB
+          </span>
+        )}
+      </div>
+    </header>
+  );
+}
+
+const TOOLS = [
+  { id: "image", label: "Image", icon: ImageIcon, enabled: true },
+  { id: "model", label: "3D Model", icon: Box, enabled: false },
+  { id: "texture", label: "Texture", icon: PaintBucket, enabled: false },
+];
+
+export function Rail({ active }: { active: string }) {
+  return (
+    <nav className="rail">
+      {TOOLS.map(({ id, label, icon: Icon, enabled }) => (
+        <button key={id} className={`rail-item ${active === id ? "active" : ""}`} disabled={!enabled} title={enabled ? label : `${label} — coming soon`}>
+          <Icon size={18} />
+          <span>{label}</span>
+          {!enabled && <em>soon</em>}
+        </button>
+      ))}
+    </nav>
+  );
+}
