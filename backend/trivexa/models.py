@@ -24,13 +24,14 @@ class Checkpoint:
 _arch_cache: dict[tuple[str, float, int], str] = {}
 
 
-def _read_safetensors_keys(path: Path) -> list[str]:
+def _read_safetensors_header(path: Path) -> dict:
     with path.open("rb") as f:
         header_len = struct.unpack("<Q", f.read(8))[0]
         if header_len > 100_000_000:
-            return []
+            return {}
         header = json.loads(f.read(header_len))
-    return [k for k in header if k != "__metadata__"]
+    header.pop("__metadata__", None)
+    return header
 
 
 def detect_arch(path: Path) -> str:
@@ -38,12 +39,16 @@ def detect_arch(path: Path) -> str:
     key = (str(path), st.st_mtime, st.st_size)
     if key not in _arch_cache:
         try:
-            keys = _read_safetensors_keys(path)
+            header = _read_safetensors_header(path)
         except (OSError, ValueError, struct.error):
-            keys = []
-        if any(k.startswith("conditioner.embedders.1.") for k in keys):
+            header = {}
+        # Inpainting/instruct variants take extra UNet input channels and can't do plain text-to-image.
+        conv_in = header.get("model.diffusion_model.input_blocks.0.0.weight", {}).get("shape", [0, 4])
+        if conv_in[1] != 4:
+            arch = "unknown"
+        elif any(k.startswith("conditioner.embedders.1.") for k in header):
             arch = "sdxl"
-        elif any(k.startswith("cond_stage_model.transformer.") for k in keys):
+        elif any(k.startswith("cond_stage_model.transformer.") for k in header):
             arch = "sd15"
         else:
             arch = "unknown"
@@ -69,11 +74,11 @@ def list_checkpoints() -> list[Checkpoint]:
     return out
 
 
-def resolve_checkpoint(model_id: str, arch: str) -> Path:
-    """Map a public checkpoint id back to a file, refusing anything not in the listing."""
+def resolve_checkpoint(model_id: str, archs: set[str]) -> tuple[Path, str]:
+    """Map a public checkpoint id back to (file, arch), refusing anything not in the listing."""
     for ckpt in list_checkpoints():
         if ckpt.id == model_id:
-            if ckpt.arch != arch:
-                raise ValueError(f"{ckpt.name} is a {ckpt.arch} model, expected {arch}")
-            return CHECKPOINTS_DIR / ckpt.id
+            if ckpt.arch not in archs:
+                raise ValueError(f"{ckpt.name} is not a supported model type ({ckpt.arch})")
+            return CHECKPOINTS_DIR / ckpt.id, ckpt.arch
     raise ValueError(f"Unknown model: {model_id}")
