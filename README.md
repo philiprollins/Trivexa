@@ -12,6 +12,10 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
   (~2 s per mesh, vertex colours) from an upload, a gallery image or any view of a multiview set. Models open
   in an orbit viewer (colour / clay / wireframe) and download as GLB or OBJ. Rough, but fine for prototypes
   and small props.
+- **Texture**: gives a 3D model a proper UV texture from a reference image (by default the image it was made from):
+  MV-Adapter's geometry-guided `ig2mv` generates six views (incl. top/bottom) conditioned on the mesh's position
+  and normal maps, which are projected and baked into a 1K–4K texture (~80 s). Output: textured GLB, OBJ zip
+  (OBJ + MTL + PNG) and the texture PNG.
 
 ## Run
 
@@ -23,10 +27,11 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
 
 ### Extra weights
 
-Multiview needs the MV-Adapter SDXL weights (t2mv 1.96 GB, i2mv 3.6 GB). Download or resume them with:
+Multiview needs the MV-Adapter SDXL weights (t2mv 1.96 GB, i2mv 3.6 GB) and Texture needs ig2mv (3.6 GB;
+tg2mv is optional, for prompt-only texturing later). Download or resume them with:
 
 ```bash
-cd backend && uv run python -m trivexa.download        # or: ... download t2mv / i2mv
+cd backend && uv run python -m trivexa.download        # or: ... download t2mv i2mv ig2mv tg2mv
 ```
 
 Files are pinned to a specific revision and checked against their published SHA-256.
@@ -47,7 +52,7 @@ cd frontend && npm run dev     # → http://localhost:5173 (proxies /api and /fi
 | Model files (read-only) | `~/ComfyUI/models` — override with `TRIVEXA_MODELS_DIR` |
 | Generated images | `data/outputs/images/YYYY-MM-DD/*.png` (settings embedded as PNG text chunks) |
 | Multi-view sets | `data/outputs/multiview/YYYY-MM-DD/<id>/` (`view_000.png` … `view_315.png`, `grid.png`, `reference.png`) |
-| 3D models | `data/outputs/models3d/YYYY-MM-DD/<id>/` (`model.glb`, `model.obj`, `input.png`) |
+| 3D models | `data/outputs/models3d/YYYY-MM-DD/<id>/` (`model.glb`, `model.obj`, `input.png`; textured models also `material.mtl`, `texture.png`, `views.png`) |
 | Downloaded weights | `data/models/` (MV-Adapter) |
 | Thumbnails | `data/outputs/thumbs/` |
 | Asset database | `data/trivexa.db` (SQLite) |
@@ -67,6 +72,7 @@ backend/trivexa/
   engines/multiview.py  MV-Adapter text/image-to-multiview on an SDXL checkpoint
   engines/bg_removal.py BiRefNet foreground extraction
   engines/triposr.py    TripoSR image-to-mesh
+  engines/texture.py    UV unwrap (xatlas), headless OpenGL rasterisation (moderngl/EGL), view projection + baking
   download.py      resumable, checksum-verified weight downloads
   vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR); see vendor/README.md
 frontend/src/      React UI (Vite)
@@ -79,6 +85,10 @@ frontend/src/      React UI (Vite)
   at a time, so switching models reloads (~3s SD 1.5, ~15s SDXL).
 - CLIP skip 1 is each architecture's standard layer (last for SD 1.5, penultimate for SDXL); 2 matches A1111's
   "CLIP skip 2" on SD 1.5.
+- Texturing replaces MV-Adapter's own texture pipeline (nvdiffrast, CV-CUDA, open3d, LaMa, RealESRGAN) with a
+  lean baker: texels no view sees keep the mesh's vertex colours. Meshes are expected to face +Z (glTF front);
+  the Texture panel can turn a model that faces another way. TripoSR models made before this was fixed face -Z
+  and default to a half turn.
 - Prompts longer than 77 tokens are encoded in chunks rather than truncated. `(word:1.2)` weighting syntax is not parsed yet.
 - The SDXL VAE decodes in bf16 to avoid the fp16 NaN issue without the fp32 memory spike.
 - Only one large pipeline (image, multiview or 3D) is on the GPU at a time; switching tools reloads
