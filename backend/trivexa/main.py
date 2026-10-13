@@ -21,7 +21,9 @@ from . import models
 from .config import CHECKPOINTS_DIR, FRONTEND_DIST, OUTPUTS_DIR, ensure_dirs
 from .engines.bg_removal import BackgroundRemover
 from .engines.diffusion import ARCHS, SAMPLERS, DiffusionEngine, GenParams
+from .engines import triposr
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
+from .engines.triposr import TripoSREngine, TripoSRParams
 from .jobs import Job, JobManager
 from .store import Store
 
@@ -34,6 +36,14 @@ jobs = JobManager()
 diffusion = DiffusionEngine()
 multiview = MultiviewEngine()
 bg_remover = BackgroundRemover()
+tripo = TripoSREngine()
+
+
+def _exclusive(keep) -> None:
+    """Only one large pipeline on the GPU at a time: unload every engine except `keep`."""
+    for engine in (diffusion, multiview, tripo):
+        if engine is not keep:
+            engine.unload()
 
 
 @asynccontextmanager
@@ -75,8 +85,7 @@ def _loaded_label() -> str | None:
 @app.post("/api/unload")
 def unload():
     with jobs.gpu_lock:
-        diffusion.unload()
-        multiview.unload()
+        _exclusive(None)
     return {"ok": True}
 
 
@@ -90,6 +99,7 @@ def list_models():
             "i2mv": adapter_available("i2mv"),
             "bg_removal": bg_remover.available(),
         },
+        "model3d": {"triposr": triposr.available()},
     }
 
 
@@ -141,7 +151,7 @@ async def generate_image(req: ImageGenRequest):
 
 def _image_runner(model_path, params: dict):
     def run(job: Job) -> dict:
-        multiview.unload()  # only one large pipeline on the GPU at a time
+        _exclusive(diffusion)
         image = diffusion.generate(
             GenParams(
                 arch=params["arch"],
@@ -181,21 +191,39 @@ class MultiviewGenRequest(BaseModel):
     reference_scale: float = Field(1.0, ge=0.0, le=2.0)
 
 
+def _decode_data_url(data_url: str) -> Image.Image:
+    try:
+        _, b64 = data_url.split(",", 1)
+        image = Image.open(io.BytesIO(base64.b64decode(b64)))
+        image.load()
+    except (ValueError, binascii.Error, UnidentifiedImageError, OSError) as e:
+        raise HTTPException(400, "Could not read the uploaded image") from e
+    return image
+
+
+def _load_source_image(asset_id: str | None, data_url: str | None, view: int = 0) -> tuple[Image.Image, str | None]:
+    """An input image from a gallery asset (an image, or one view of a multiview set) or an uploaded data URL."""
+    if asset_id:
+        asset = store.get(asset_id)
+        if not asset or asset["kind"] not in ("image", "multiview"):
+            raise HTTPException(400, "Source asset not found")
+        if asset["kind"] == "multiview":
+            match = next((v for v in asset["views"] if v["azimuth"] == view), None)
+            if not match:
+                raise HTTPException(400, f"That multiview set has no {view}° view")
+            path = OUTPUTS_DIR / match["url"].removeprefix("/files/")
+        else:
+            path = OUTPUTS_DIR / asset["file"]
+        return Image.open(path).copy(), asset["id"]
+    if data_url:
+        return _decode_data_url(data_url), None
+    raise HTTPException(400, "An input image is required")
+
+
 def _load_reference(req: MultiviewGenRequest) -> tuple[Image.Image, str | None]:
-    if req.reference_asset:
-        asset = store.get(req.reference_asset)
-        if not asset or asset["kind"] != "image":
-            raise HTTPException(400, "Reference asset not found")
-        return Image.open(OUTPUTS_DIR / asset["file"]).copy(), asset["id"]
-    if req.reference_image:
-        try:
-            _, b64 = req.reference_image.split(",", 1)
-            image = Image.open(io.BytesIO(base64.b64decode(b64)))
-            image.load()
-        except (ValueError, binascii.Error, UnidentifiedImageError, OSError) as e:
-            raise HTTPException(400, "Could not read the uploaded image") from e
-        return image, None
-    raise HTTPException(400, "Image-to-multiview needs a reference image")
+    if req.reference_asset and (a := store.get(req.reference_asset)) and a["kind"] != "image":
+        raise HTTPException(400, "Reference asset not found")
+    return _load_source_image(req.reference_asset, req.reference_image)
 
 
 @app.post("/api/generate/multiview")
@@ -236,7 +264,7 @@ async def generate_multiview(req: MultiviewGenRequest):
 
 def _multiview_runner(model_path, params: dict, source: Image.Image | None, parent_id: str | None):
     def run(job: Job) -> dict:
-        diffusion.unload()  # only one large pipeline on the GPU at a time
+        _exclusive(multiview)
         reference = None
         if params["mode"] == "i2mv":
             image = bg_remover.remove(source) if params["remove_bg"] else source
@@ -258,6 +286,40 @@ def _multiview_runner(model_path, params: dict, source: Image.Image | None, pare
             is_cancelled=job.cancel_requested.is_set,
         )
         return store.save_multiview(views, AZIMUTHS, params, reference=reference, parent_id=parent_id)
+
+    return run
+
+
+class Model3DRequest(BaseModel):
+    source_asset: str | None = None
+    source_view: int = 0  # azimuth, when the source is a multiview set
+    source_image: str | None = Field(None, max_length=40_000_000)
+    remove_bg: bool = True
+    foreground_ratio: float = Field(0.85, ge=0.5, le=1.0)
+    mc_resolution: int = Field(256, ge=64, le=512)
+
+
+@app.post("/api/generate/3d")
+async def generate_3d(req: Model3DRequest):
+    if not triposr.available():
+        raise HTTPException(400, "TripoSR weights not found (models/triposr)")
+    if req.remove_bg and not bg_remover.available():
+        raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
+    source, parent_id = _load_source_image(req.source_asset, req.source_image, req.source_view)
+    params = req.model_dump(exclude={"source_image"}) | {"engine": "triposr"}
+    job = Job(kind="model3d", params=params, run=_model3d_runner(params, source, parent_id))
+    return {"jobs": [jobs.submit(job).public()]}
+
+
+def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
+    def run(job: Job) -> dict:
+        _exclusive(tripo)
+        image = bg_remover.remove(source) if params["remove_bg"] else source
+        mesh, processed = tripo.generate(
+            TripoSRParams(image=image, foreground_ratio=params["foreground_ratio"], mc_resolution=params["mc_resolution"]),
+            on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
+        )
+        return store.save_model3d(mesh, processed, params, parent_id)
 
     return run
 
@@ -297,6 +359,18 @@ class AssetPatch(BaseModel):
 @app.patch("/api/assets/{asset_id}")
 def patch_asset(asset_id: str, patch: AssetPatch):
     asset = store.set_favorite(asset_id, patch.favorite)
+    if not asset:
+        raise HTTPException(404, "Asset not found")
+    return asset
+
+
+class ThumbnailUpload(BaseModel):
+    image: str = Field(max_length=10_000_000)  # PNG/WebP data URL rendered by the 3D viewer
+
+
+@app.post("/api/assets/{asset_id}/thumbnail")
+def set_thumbnail(asset_id: str, body: ThumbnailUpload):
+    asset = store.set_thumbnail(asset_id, _decode_data_url(body.image))
     if not asset:
         raise HTTPException(404, "Asset not found")
     return asset
