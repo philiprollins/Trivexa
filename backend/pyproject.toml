@@ -1,0 +1,28 @@
+[project]
+name = "trivexa"
+version = "0.1.0"
+description = "Local image and 3D generation studio"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "torch>=2.8",
+    "diffusers>=0.35",
+    "transformers>=4.50",
+    "accelerate>=1.0",
+    "safetensors>=0.4",
+    "huggingface_hub>=0.30",
+    "pillow>=11",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

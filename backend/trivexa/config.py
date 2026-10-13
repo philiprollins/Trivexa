@@ -1,0 +1,21 @@
+import os
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+# Model files are shared with an existing ComfyUI install, but only read from disk.
+MODELS_DIR = Path(os.environ.get("TRIVEXA_MODELS_DIR", Path.home() / "ComfyUI" / "models"))
+CHECKPOINTS_DIR = MODELS_DIR / "checkpoints"
+
+DATA_DIR = Path(os.environ.get("TRIVEXA_DATA_DIR", ROOT / "data"))
+OUTPUTS_DIR = DATA_DIR / "outputs"
+DB_PATH = DATA_DIR / "trivexa.db"
+# Small architecture configs/tokenizers diffusers needs to build a pipeline from a single checkpoint file.
+HF_CONFIG_DIR = DATA_DIR / "hf-configs"
+
+FRONTEND_DIST = ROOT / "frontend" / "dist"
+
+
+def ensure_dirs() -> None:
+    for d in (DATA_DIR, OUTPUTS_DIR, HF_CONFIG_DIR):
+        d.mkdir(parents=True, exist_ok=True)
