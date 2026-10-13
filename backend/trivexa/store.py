@@ -60,6 +60,12 @@ class Store:
             d["views"] = [{"azimuth": v["azimuth"], "url": f"/files/{v['file']}"} for v in extra["views"]]
         if "reference" in extra:
             d["reference_url"] = f"/files/{extra['reference']}"
+        if "model" in extra:
+            d["model_urls"] = {fmt: f"/files/{rel}" for fmt, rel in extra["model"].items()}
+            d["input_url"] = f"/files/{extra['input']}"
+            d["thumb_rendered"] = extra.get("thumb_rendered", False)
+            if d["thumb_rendered"]:
+                d["thumb_url"] += "?rendered"  # same file, new content: bust the browser cache
         return d
 
     @staticmethod
@@ -140,6 +146,39 @@ class Store:
         self._save_thumb(grid, rel_thumb)
         return self._insert(asset_id, "multiview", now, rel_file, rel_thumb, w, h, params, parent_id, extra)
 
+    def save_model3d(self, mesh, input_image: Image.Image, params: dict, parent_id: str | None = None) -> dict:
+        """GLB (for the viewer) and OBJ (for DCC tools) plus the processed input, one folder per model.
+
+        The thumbnail starts as the input image; the UI replaces it with a render of the model (set_thumbnail).
+        """
+        asset_id, now, day, stem = self._new_stem(params)
+        rel_dir = Path("models3d") / day / stem
+        (OUTPUTS_DIR / rel_dir).mkdir(parents=True, exist_ok=True)
+        files = {"glb": rel_dir / "model.glb", "obj": rel_dir / "model.obj"}
+        for fmt, rel in files.items():
+            mesh.export(OUTPUTS_DIR / rel)
+        rel_input = rel_dir / "input.png"
+        input_image.save(OUTPUTS_DIR / rel_input)
+        rel_thumb = Path("thumbs") / day / f"{stem}_3d.webp"
+        self._save_thumb(input_image, rel_thumb)
+        extra = {"model": {fmt: rel.as_posix() for fmt, rel in files.items()}, "input": rel_input.as_posix()}
+        params = params | {"vertices": len(mesh.vertices), "faces": len(mesh.faces)}
+        return self._insert(asset_id, "model3d", now, files["glb"], rel_thumb, input_image.width, input_image.height,
+                            params, parent_id, extra)
+
+    def set_thumbnail(self, asset_id: str, image: Image.Image) -> dict | None:
+        asset = self.get(asset_id)
+        if not asset:
+            return None
+        with self._lock:
+            row = self._db.execute("SELECT thumb, extra_files FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        rel_thumb = Path(row["thumb"])
+        self._save_thumb(image.convert("RGB"), rel_thumb)
+        extra = json.loads(row["extra_files"] or "{}") | {"thumb_rendered": True}
+        with self._lock, self._db:
+            self._db.execute("UPDATE assets SET extra_files = ? WHERE id = ?", (json.dumps(extra), asset_id))
+        return self.get(asset_id)
+
     def get(self, asset_id: str) -> dict | None:
         with self._lock:
             row = self._db.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
@@ -173,10 +212,11 @@ class Store:
         for rel in (asset["file"], asset["thumb"]):
             if rel:
                 (OUTPUTS_DIR / rel).unlink(missing_ok=True)
-        if asset["kind"] == "multiview":
+        if asset["kind"] in ("multiview", "model3d"):
             folder = (OUTPUTS_DIR / asset["file"]).parent
-            for f in folder.glob("*.png"):
-                f.unlink()
+            for f in folder.iterdir():
+                if f.is_file():
+                    f.unlink()
             folder.rmdir()
         with self._lock, self._db:
             self._db.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
