@@ -1,8 +1,9 @@
 """Texture an existing mesh from multi-view images (MV-Adapter ig2mv), baked into a UV texture.
 
-A lean stand-in for MV-Adapter's own texture pipeline (which needs nvdiffrast, CV-CUDA, open3d, pymeshlab and
-LaMa/RealESRGAN): rasterisation is OpenGL via moderngl on a headless EGL context, UVs come from xatlas, and texels
-no view can see fall back to the mesh's own vertex colours (TripoSR provides them) or to inpainting.
+Also renders the ig2mv condition maps for both bakers. The "lean" baker here is the fallback for MV-Adapter's
+own texture pipeline (texture_upstream.py), which needs nvdiffrast, CV-CUDA, open3d, pymeshlab and LaMa/RealESRGAN:
+rasterisation is OpenGL via moderngl on a headless EGL context, UVs come from xatlas, and texels no view can see
+fall back to the mesh's own vertex colours (TripoSR provides them) or to inpainting.
 
 Coordinate conventions follow MV-Adapter's ig2mv inference: the mesh is Y-up with its front facing +Z (glTF),
 rescaled so its largest coordinate is 0.5, and rendered by six orthographic cameras
@@ -91,8 +92,9 @@ def cameras(device: str = "cpu"):
     )
 
 
-def prepare_mesh(mesh: trimesh.Trimesh, front_yaw_deg: float = 0.0) -> PreparedMesh:
-    """Normalise like mvadapter.load_mesh(rescale=True) and unwrap UVs with xatlas (~10 s for 80k faces).
+def prepare_mesh(mesh: trimesh.Trimesh, front_yaw_deg: float = 0.0, unwrap: bool = True) -> PreparedMesh:
+    """Normalise like mvadapter.load_mesh(rescale=True) and, if `unwrap`, unwrap UVs with xatlas (~10 s for
+    80k faces). Without unwrapping the mesh can still render the ig2mv condition maps, but not be baked.
 
     front_yaw_deg turns the mesh about +Y before texturing, for meshes whose front isn't +Z; only the
     cameras' view of it changes, the returned geometry keeps its original orientation.
@@ -107,7 +109,11 @@ def prepare_mesh(mesh: trimesh.Trimesh, front_yaw_deg: float = 0.0) -> PreparedM
     if mesh.visual.kind == "vertex":
         colors = np.asarray(mesh.visual.vertex_colors[:, :3], dtype=np.float32) / 255
 
-    vmapping, faces, uvs = xatlas.parametrize(vertices, np.asarray(mesh.faces))
+    if unwrap:
+        vmapping, faces, uvs = xatlas.parametrize(vertices, np.asarray(mesh.faces))
+    else:
+        vmapping, faces = np.arange(len(vertices)), np.asarray(mesh.faces)
+        uvs = np.zeros((len(vertices), 2), dtype=np.float32)
     return PreparedMesh(
         original=mesh,
         vmapping=vmapping,

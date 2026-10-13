@@ -18,10 +18,11 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from . import models
-from .config import CHECKPOINTS_DIR, FRONTEND_DIST, OUTPUTS_DIR, ensure_dirs
+from .config import CHECKPOINTS_DIR, FRONTEND_DIST, OUTPUTS_DIR, SETTINGS, SETTINGS_PATH, ensure_dirs
 from .engines.bg_removal import BackgroundRemover
 from .engines.diffusion import ARCHS, SAMPLERS, DiffusionEngine, GenParams
 from .engines import texture as texturing
+from .engines import texture_upstream
 from .engines import triposr
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
 from .engines.triposr import TripoSREngine, TripoSRParams
@@ -38,6 +39,22 @@ diffusion = DiffusionEngine()
 multiview = MultiviewEngine()
 bg_remover = BackgroundRemover()
 tripo = TripoSREngine()
+
+
+def _texture_baker() -> tuple[str, str | None]:
+    """The baker to use (settings.toml [texture] baker) and, if it had to fall back, why."""
+    wanted = SETTINGS["texture"].get("baker", "upstream")
+    if wanted == "upstream":
+        reason = texture_upstream.unavailable_reason()
+        return ("lean", f"upstream baker unavailable: {reason}") if reason else ("upstream", None)
+    if wanted != "lean":
+        return "lean", f"unknown baker {wanted!r} in {SETTINGS_PATH.name}"
+    return "lean", None
+
+
+TEXTURE_BAKER, TEXTURE_BAKER_NOTE = _texture_baker()
+if TEXTURE_BAKER_NOTE:
+    logging.getLogger(__name__).warning("Texture baker: using lean (%s)", TEXTURE_BAKER_NOTE)
 
 
 def _exclusive(keep) -> None:
@@ -102,6 +119,7 @@ def list_models():
             "bg_removal": bg_remover.available(),
         },
         "model3d": {"triposr": triposr.available()},
+        "texture": {"baker": TEXTURE_BAKER, "note": TEXTURE_BAKER_NOTE},
     }
 
 
@@ -372,6 +390,7 @@ async def generate_texture(req: TextureRequest):
         "sampler_label": SAMPLERS[req.sampler][0],
         "engine": source["params"].get("engine", "mesh") + " + mv-adapter",
         "front": "+z",
+        "baker": TEXTURE_BAKER,
     }
     job = Job(kind="texture", params=params, run=_texture_runner(model_path, mesh_path, reference, params, source["id"]))
     return {"jobs": [jobs.submit(job).public()]}
@@ -382,8 +401,10 @@ def _texture_runner(model_path, mesh_path, reference_src: Image.Image, params: d
         import trimesh
 
         _exclusive(multiview)
+        lean = params["baker"] == "lean"
         mesh = trimesh.load(mesh_path, force="mesh")
-        prepared = texturing.prepare_mesh(mesh, front_yaw_deg=params["front_yaw"])  # UV unwrap, ~10 s
+        # The lean baker needs our UV unwrap (~10 s); the upstream one unwraps itself.
+        prepared = texturing.prepare_mesh(mesh, front_yaw_deg=params["front_yaw"], unwrap=lean)
         raster = texturing.Rasterizer(prepared)  # GL context lives on this worker thread
         try:
             pos_maps, nrm_maps = raster.render_views(768)
@@ -405,10 +426,14 @@ def _texture_runner(model_path, mesh_path, reference_src: Image.Image, params: d
                 on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
                 is_cancelled=job.cancel_requested.is_set,
             )
-            texture = texturing.bake(prepared, raster, views, pos_maps, uv_size=params["uv_size"])
+            if lean:
+                texture = texturing.bake(prepared, raster, views, pos_maps, uv_size=params["uv_size"])
+                out = texturing.textured_mesh(prepared, texture)
         finally:
             raster.release()
-        out = texturing.textured_mesh(prepared, texture)
+        if not lean:
+            multiview.unload()  # the upstream baker peaks ~12 GB; it can't share the GPU with the MV pipeline
+            out, texture = texture_upstream.bake(mesh_path, views, params["uv_size"], params["front_yaw"])
 
         grid = Image.new("RGB", (768 * 3, 768 * 2))
         for i, view in enumerate(views):
@@ -483,10 +508,16 @@ def download_obj_zip(asset_id: str):
         raise HTTPException(404, "3D model not found")
     folder = (OUTPUTS_DIR / asset["model_urls"]["obj"].removeprefix("/files/")).parent
     buf = io.BytesIO()
+    # The OBJ, its .mtl files, and whatever textures they reference (names depend on the material).
+    files = {folder / "model.obj"}
+    for mtl in folder.glob("*.mtl"):
+        files.add(mtl)
+        for line in mtl.read_text().splitlines():
+            if line.strip().startswith("map_") and (tex := folder / line.split()[-1]).is_file():
+                files.add(tex)
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in folder.iterdir():
-            if f.name == "model.obj" or f.suffix == ".mtl" or f.name.startswith("material_"):
-                zf.write(f, f.name)
+        for f in sorted(files):
+            zf.write(f, f.name)
     name = f"trivexa_{folder.name}.zip"
     return Response(buf.getvalue(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
