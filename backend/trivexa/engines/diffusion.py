@@ -121,17 +121,80 @@ def config_dir(arch: Arch) -> Path:
     return local
 
 
-def latent_preview(arch: Arch, latents: torch.Tensor, sigma: float | None) -> str:
-    x = latents[0].float()
+def latent_preview(arch: Arch, latents: torch.Tensor, sigma: float | None, grid_cols: int | None = None) -> str:
+    """JPEG data URL of the first latent, or of all latents tiled `grid_cols` wide (used for multi-view)."""
+    x = latents.float() if grid_cols else latents[:1].float()
     if sigma:
         x = x / math.sqrt(sigma**2 + 1)
     factors = torch.tensor(arch.latent_rgb, device=x.device)
     bias = torch.tensor(arch.latent_rgb_bias, device=x.device)
-    rgb = torch.einsum("chw,cr->rhw", x, factors) + bias[:, None, None]
-    rgb = ((rgb + 1) / 2).clamp(0, 1).mul(255).byte().permute(1, 2, 0).cpu().numpy()
+    rgb = torch.einsum("bchw,cr->brhw", x, factors) + bias[None, :, None, None]
+    rgb = ((rgb + 1) / 2).clamp(0, 1)
+    if grid_cols:
+        n, c, h, w = rgb.shape
+        rows = math.ceil(n / grid_cols)
+        rgb = torch.cat([rgb, rgb.new_zeros(rows * grid_cols - n, c, h, w)])
+        rgb = rgb.view(rows, grid_cols, c, h, w).permute(2, 0, 3, 1, 4).reshape(c, rows * h, grid_cols * w)
+    else:
+        rgb = rgb[0]
+    arr = rgb.mul(255).byte().permute(1, 2, 0).cpu().numpy()
     buf = io.BytesIO()
-    Image.fromarray(rgb).save(buf, format="JPEG", quality=80)
+    Image.fromarray(arr).save(buf, format="JPEG", quality=80)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def make_step_callback(
+    sched,
+    arch: Arch,
+    total_steps: int,
+    on_step: Callable[[int, int, str | None], None],
+    is_cancelled: Callable[[], bool],
+    grid_cols: int | None = None,
+):
+    """Build a diffusers callback_on_step_end that handles cancellation and streams live previews.
+
+    Previews show the model's predicted final image (x0) rather than the noisy latent, which stays unreadable
+    until late in sampling. Euler/DDIM return x0 from step(); multistep solvers keep it in model_outputs.
+    """
+    x0: dict[str, torch.Tensor | None] = {"pred": None}
+    scheduler_step = sched.step
+
+    def step_capturing_x0(*args, **kwargs):
+        out = scheduler_step(*args, **kwargs)
+        x0["pred"] = out[1] if isinstance(out, tuple) and len(out) > 1 else getattr(out, "pred_original_sample", None)
+        return out
+
+    sched.step = step_capturing_x0
+
+    def callback(pipe_, i, t, kwargs):
+        if is_cancelled():
+            raise Cancelled()
+        pred = x0["pred"]
+        if pred is None and getattr(sched, "model_outputs", None) and sched.model_outputs[-1] is not None:
+            pred = sched.model_outputs[-1]
+        if pred is not None:
+            preview = latent_preview(arch, pred, None, grid_cols)
+        else:
+            sigma = None
+            if sched.init_noise_sigma > 1 and getattr(sched, "step_index", None) is not None:
+                sigma = float(sched.sigmas[min(sched.step_index, len(sched.sigmas) - 1)])
+            preview = latent_preview(arch, kwargs["latents"], sigma, grid_cols)
+        on_step(i + 1, total_steps, preview)
+        return kwargs
+
+    return callback
+
+
+@torch.inference_mode()
+def decode_latents(pipe, latents: torch.Tensor, vae_dtype: torch.dtype) -> list[Image.Image]:
+    """Decode one latent at a time (keeps VRAM flat for multi-view batches)."""
+    vae = pipe.vae
+    vae.to(dtype=vae_dtype)
+    images = []
+    for lat in latents.split(1):
+        image = vae.decode(lat.to(vae_dtype) / vae.config.scaling_factor, return_dict=False)[0]
+        images += pipe.image_processor.postprocess(image.float(), output_type="pil")
+    return images
 
 
 class DiffusionEngine:
@@ -259,37 +322,10 @@ class DiffusionEngine:
         sched = scheduler_cls.from_config(self._base_scheduler_config, **overrides)
         pipe.scheduler = sched
 
-        # Preview the model's predicted final image (x0) rather than the noisy latent, which stays unreadable
-        # until late in sampling. Euler/DDIM return x0 from step(); multistep solvers keep it in model_outputs.
-        x0: dict[str, torch.Tensor | None] = {"pred": None}
-        scheduler_step = sched.step
-
-        def step_capturing_x0(*args, **kwargs):
-            out = scheduler_step(*args, **kwargs)
-            x0["pred"] = out[1] if isinstance(out, tuple) and len(out) > 1 else getattr(out, "pred_original_sample", None)
-            return out
-
-        sched.step = step_capturing_x0
-
         encode = self._encode_sdxl if arch.id == "sdxl" else self._encode_sd15
         embeds = encode(p.prompt, p.negative, p.clip_skip)
         generator = torch.Generator("cpu").manual_seed(p.seed)
-
-        def callback(pipe_, i, t, kwargs):
-            if is_cancelled():
-                raise Cancelled()
-            pred = x0["pred"]
-            if pred is None and getattr(sched, "model_outputs", None) and sched.model_outputs[-1] is not None:
-                pred = sched.model_outputs[-1]
-            if pred is not None:
-                preview = latent_preview(arch, pred, None)
-            else:
-                sigma = None
-                if sched.init_noise_sigma > 1 and getattr(sched, "step_index", None) is not None:
-                    sigma = float(sched.sigmas[min(sched.step_index, len(sched.sigmas) - 1)])
-                preview = latent_preview(arch, kwargs["latents"], sigma)
-            on_step(i + 1, p.steps, preview)
-            return kwargs
+        callback = make_step_callback(sched, arch, p.steps, on_step, is_cancelled)
 
         result = pipe(
             **embeds,
@@ -302,11 +338,4 @@ class DiffusionEngine:
             callback_on_step_end_tensor_inputs=["latents"],
             output_type="latent",
         )
-        return self._decode(result.images)
-
-    @torch.inference_mode()
-    def _decode(self, latents: torch.Tensor) -> Image.Image:
-        vae = self.pipe.vae
-        latents = latents.to(self.vae_dtype) / vae.config.scaling_factor
-        image = vae.decode(latents, return_dict=False)[0]
-        return self.pipe.image_processor.postprocess(image.float(), output_type="pil")[0]
+        return decode_latents(pipe, result.images, self.vae_dtype)[0]
