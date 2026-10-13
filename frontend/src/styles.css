@@ -739,6 +739,10 @@ button:disabled {
   border: 1px solid var(--border);
 }
 
+.engine-card .warn-text {
+  color: var(--accent);
+}
+
 .engine-card span {
   color: var(--muted);
   font-size: 12px;

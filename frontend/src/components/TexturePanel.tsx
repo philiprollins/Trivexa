@@ -1,6 +1,6 @@
 import { ChevronDown, ImagePlus, PaintBucket, X, Zap } from "lucide-react";
 import { useRef, useState } from "react";
-import type { Asset, Checkpoint, Sampler } from "../api";
+import type { Asset, Checkpoint, Sampler, TextureBaker } from "../api";
 import { SeedInput, Section, Segmented, Slider } from "./controls";
 
 export interface TextureForm {
@@ -35,6 +35,7 @@ interface Props {
   samplers: Sampler[];
   available: boolean;
   bgAvailable: boolean;
+  baker: TextureBaker | null;
   onGenerate: () => void;
   submitting: boolean;
   notify: (msg: string, error?: boolean) => void;
@@ -153,6 +154,21 @@ export function TexturePanel(p: Props) {
             ))}
           </select>
         </Section>
+
+        {p.baker && (
+          <Section label="Baker">
+            <div className="engine-card">
+              <strong>{p.baker.baker === "upstream" ? "MV-Adapter (upstream)" : "Lean (Trivexa)"}</strong>
+              <span>
+                {p.baker.baker === "upstream"
+                  ? "UVAtlas unwrap, RealESRGAN ×2 views, LaMa inpainting of unseen areas"
+                  : "xatlas unwrap, OpenGL projection, vertex colours where no view sees"}
+              </span>
+              {p.baker.note && <span className="warn-text">Fallback: {p.baker.note}</span>}
+              <span>Change in settings.toml ([texture] baker).</span>
+            </div>
+          </Section>
+        )}
 
         <Section label="Texture size">
           <Segmented

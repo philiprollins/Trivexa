@@ -154,6 +154,8 @@ function Model3DDetails({ asset }: { asset: Asset }) {
     ...(pr.textured
       ? ([
           ["Texture", `${pr.uv_size} × ${pr.uv_size}`],
+          // Textured models from before the baker setting existed were all made with the lean baker.
+          ["Baker", pr.baker === "upstream" ? "MV-Adapter (upstream)" : "Lean (Trivexa)"],
           ["Base model", pr.model_name ?? pr.model ?? "—"],
           ["Seed", pr.seed ?? "—"],
         ] as [string, string | number][])

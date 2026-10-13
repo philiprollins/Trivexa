@@ -8,6 +8,7 @@ import {
   type MultiviewSupport,
   type Sampler,
   type Status,
+  type TextureBaker,
 } from "./api";
 import { AssetsPanel, type Selection } from "./components/AssetsPanel";
 import { Rail, TopBar, type Tool } from "./components/Chrome";
@@ -113,6 +114,7 @@ export default function App() {
   const [form3d, setForm3d] = usePersistentForm<Model3DForm>("trivexa.model3dForm", DEFAULT_3D_FORM);
   const [source3d, setSource3d] = useState<Source3D | null>(null);
   const [tripoAvailable, setTripoAvailable] = useState(false);
+  const [textureBaker, setTextureBaker] = useState<TextureBaker | null>(null);
   const [texForm, setTexForm, setTexFormState] = usePersistentForm<TextureForm>("trivexa.textureForm", DEFAULT_TEXTURE_FORM);
   const [texModel, setTexModelState] = useState<Asset | null>(null);
   const [texYaw, setTexYaw] = useState(0);
@@ -154,7 +156,8 @@ export default function App() {
 
   // Re-checked when switching tools, so newly downloaded adapter weights show up without a reload.
   useEffect(() => {
-    api.models().then(({ checkpoints, multiview, model3d }) => {
+    api.models().then(({ checkpoints, multiview, model3d, texture }) => {
+      setTextureBaker(texture);
       setCheckpoints(checkpoints);
       setMvSupport(multiview);
       setTripoAvailable(model3d.triposr);
@@ -436,6 +439,7 @@ export default function App() {
             samplers={samplers}
             available={mvSupport?.ig2mv ?? false}
             bgAvailable={mvSupport?.bg_removal ?? false}
+            baker={textureBaker}
             onGenerate={generateTexture}
             submitting={submitting}
             notify={notify}

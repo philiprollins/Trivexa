@@ -56,6 +56,7 @@ export interface Model3DParams {
   textured?: boolean;
   front_yaw?: number;
   uv_size?: number;
+  baker?: "upstream" | "lean";
 }
 
 export interface Asset {
@@ -107,6 +108,11 @@ export interface Status {
   outputs_dir: string;
 }
 
+export interface TextureBaker {
+  baker: "upstream" | "lean";
+  note: string | null; // why it fell back to "lean", if it did
+}
+
 export interface MultiviewSupport {
   t2mv: boolean;
   i2mv: boolean;
@@ -143,7 +149,12 @@ export const api = {
   status: () => request<Status>("/api/status"),
   unload: () => request("/api/unload", { method: "POST" }),
   models: () =>
-    request<{ checkpoints: Checkpoint[]; multiview: MultiviewSupport; model3d: { triposr: boolean } }>("/api/models"),
+    request<{
+      checkpoints: Checkpoint[];
+      multiview: MultiviewSupport;
+      model3d: { triposr: boolean };
+      texture: TextureBaker;
+    }>("/api/models"),
   samplers: () => request<{ samplers: Sampler[] }>("/api/samplers"),
   generateImage: (params: Omit<ImageParams, "model_name" | "sampler_label" | "arch"> & { count: number }) =>
     request<{ jobs: Job[] }>("/api/generate/image", { method: "POST", body: JSON.stringify(params) }),
