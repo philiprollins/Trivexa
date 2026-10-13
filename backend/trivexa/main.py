@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 import torch
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ from . import models
 from .config import CHECKPOINTS_DIR, FRONTEND_DIST, OUTPUTS_DIR, ensure_dirs
 from .engines.bg_removal import BackgroundRemover
 from .engines.diffusion import ARCHS, SAMPLERS, DiffusionEngine, GenParams
+from .engines import texture as texturing
 from .engines import triposr
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
 from .engines.triposr import TripoSREngine, TripoSRParams
@@ -97,6 +98,7 @@ def list_models():
         "multiview": {
             "t2mv": adapter_available("t2mv"),
             "i2mv": adapter_available("i2mv"),
+            "ig2mv": adapter_available("ig2mv"),
             "bg_removal": bg_remover.available(),
         },
         "model3d": {"triposr": triposr.available()},
@@ -306,7 +308,8 @@ async def generate_3d(req: Model3DRequest):
     if req.remove_bg and not bg_remover.available():
         raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
     source, parent_id = _load_source_image(req.source_asset, req.source_image, req.source_view)
-    params = req.model_dump(exclude={"source_image"}) | {"engine": "triposr"}
+    # "front" records which way the mesh faces; older TripoSR models (before it was set) face -Z.
+    params = req.model_dump(exclude={"source_image"}) | {"engine": "triposr", "front": "+z"}
     job = Job(kind="model3d", params=params, run=_model3d_runner(params, source, parent_id))
     return {"jobs": [jobs.submit(job).public()]}
 
@@ -320,6 +323,100 @@ def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
             on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
         )
         return store.save_model3d(mesh, processed, params, parent_id)
+
+    return run
+
+
+class TextureRequest(BaseModel):
+    source_asset: str  # a 3D model asset
+    model: str  # SDXL checkpoint for MV-Adapter
+    # Reference image: the model's own input image by default, or a gallery image / upload.
+    reference_asset: str | None = None
+    reference_image: str | None = Field(None, max_length=40_000_000)
+    remove_bg: bool = True
+    prompt: str = Field("high quality", max_length=10_000)
+    negative: str = Field("watermark, ugly, deformed, noisy, blurry, low contrast", max_length=10_000)
+    steps: int = Field(40, ge=1, le=100)
+    cfg: float = Field(3.0, ge=1.0, le=20.0)
+    sampler: str = "euler"
+    seed: int = Field(-1, ge=-1, le=2**32 - 1)
+    reference_scale: float = Field(1.0, ge=0.0, le=2.0)
+    front_yaw: Literal[0, 90, 180, 270] = 0
+    uv_size: Literal[1024, 2048, 4096] = 2048
+
+
+@app.post("/api/generate/texture")
+async def generate_texture(req: TextureRequest):
+    source = store.get(req.source_asset)
+    if not source or source["kind"] != "model3d":
+        raise HTTPException(400, "Choose a 3D model to texture")
+    try:
+        model_path, _ = models.resolve_checkpoint(req.model, {"sdxl"})
+    except ValueError as e:
+        raise HTTPException(400, f"{e} (MV-Adapter needs an SDXL checkpoint)") from e
+    if req.sampler not in SAMPLERS:
+        raise HTTPException(400, f"Unknown sampler: {req.sampler}")
+    if not adapter_available("ig2mv"):
+        raise HTTPException(400, "MV-Adapter ig2mv weights are not downloaded")
+    if req.remove_bg and not bg_remover.available():
+        raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
+    if req.reference_asset or req.reference_image:
+        reference, _ = _load_source_image(req.reference_asset, req.reference_image)
+    else:
+        reference = Image.open(OUTPUTS_DIR / source["input_url"].removeprefix("/files/")).copy()
+    mesh_path = OUTPUTS_DIR / source["model_urls"]["glb"].removeprefix("/files/")
+
+    params = req.model_dump(exclude={"reference_image"}) | {
+        "seed": random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed,
+        "model_name": model_path.stem,
+        "sampler_label": SAMPLERS[req.sampler][0],
+        "engine": source["params"].get("engine", "mesh") + " + mv-adapter",
+        "front": "+z",
+    }
+    job = Job(kind="texture", params=params, run=_texture_runner(model_path, mesh_path, reference, params, source["id"]))
+    return {"jobs": [jobs.submit(job).public()]}
+
+
+def _texture_runner(model_path, mesh_path, reference_src: Image.Image, params: dict, parent_id: str):
+    def run(job: Job) -> dict:
+        import trimesh
+
+        _exclusive(multiview)
+        mesh = trimesh.load(mesh_path, force="mesh")
+        prepared = texturing.prepare_mesh(mesh, front_yaw_deg=params["front_yaw"])  # UV unwrap, ~10 s
+        raster = texturing.Rasterizer(prepared)  # GL context lives on this worker thread
+        try:
+            pos_maps, nrm_maps = raster.render_views(768)
+            reference = prepare_reference(bg_remover.remove(reference_src) if params["remove_bg"] else reference_src)
+            views = multiview.generate(
+                MVParams(
+                    mode="ig2mv",
+                    model_path=model_path,
+                    prompt=params["prompt"] or "high quality",
+                    negative=params["negative"],
+                    steps=params["steps"],
+                    cfg=params["cfg"],
+                    sampler=params["sampler"],
+                    seed=params["seed"],
+                    reference=reference,
+                    reference_scale=params["reference_scale"],
+                    control_images=texturing.condition_images(pos_maps, nrm_maps),
+                ),
+                on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
+                is_cancelled=job.cancel_requested.is_set,
+            )
+            texture = texturing.bake(prepared, raster, views, pos_maps, uv_size=params["uv_size"])
+        finally:
+            raster.release()
+        out = texturing.textured_mesh(prepared, texture)
+
+        grid = Image.new("RGB", (768 * 3, 768 * 2))
+        for i, view in enumerate(views):
+            grid.paste(view, ((i % 3) * 768, (i // 3) * 768))
+        params_out = params | {"vertices": len(out.vertices), "faces": len(out.faces), "textured": True}
+        return store.save_model3d(
+            out, reference, params_out, parent_id, images={"texture": texture, "views": grid}
+        )
 
     return run
 
@@ -374,6 +471,24 @@ def set_thumbnail(asset_id: str, body: ThumbnailUpload):
     if not asset:
         raise HTTPException(404, "Asset not found")
     return asset
+
+
+@app.get("/api/assets/{asset_id}/obj.zip")
+def download_obj_zip(asset_id: str):
+    """OBJ with its .mtl and texture in one archive, so it opens textured in Blender etc."""
+    import zipfile
+
+    asset = store.get(asset_id)
+    if not asset or asset["kind"] != "model3d":
+        raise HTTPException(404, "3D model not found")
+    folder = (OUTPUTS_DIR / asset["model_urls"]["obj"].removeprefix("/files/")).parent
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in folder.iterdir():
+            if f.name == "model.obj" or f.suffix == ".mtl" or f.name.startswith("material_"):
+                zf.write(f, f.name)
+    name = f"trivexa_{folder.name}.zip"
+    return Response(buf.getvalue(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.delete("/api/assets/{asset_id}")
