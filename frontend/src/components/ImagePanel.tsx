@@ -1,6 +1,7 @@
-import { ChevronDown, Dices, Lock, Sparkles, Zap } from "lucide-react";
+import { ChevronDown, Sparkles, Zap } from "lucide-react";
 import { useState } from "react";
 import type { Checkpoint, ImageParams, Sampler } from "../api";
+import { SeedInput, Section, Slider } from "./controls";
 
 export type ImageForm = Omit<ImageParams, "model_name" | "sampler_label" | "arch"> & { count: number; randomSeed: boolean };
 
@@ -174,27 +175,7 @@ export function ImagePanel({ form, setForm, checkpoints, samplers, onGenerate, s
                 ))}
               </select>
             </Section>
-            <Section label="Seed">
-              <div className="seed-row">
-                <input
-                  className="input"
-                  type="number"
-                  min={0}
-                  max={4294967295}
-                  disabled={form.randomSeed}
-                  value={form.randomSeed ? "" : form.seed}
-                  placeholder="Random"
-                  onChange={(e) => setForm({ seed: Math.max(0, Math.min(4294967295, Number(e.target.value) || 0)) })}
-                />
-                <button
-                  className={`icon-btn ${form.randomSeed ? "active" : ""}`}
-                  title={form.randomSeed ? "Random seed each time (click to lock)" : "Seed locked (click for random)"}
-                  onClick={() => setForm({ randomSeed: !form.randomSeed })}
-                >
-                  {form.randomSeed ? <Dices size={16} /> : <Lock size={16} />}
-                </button>
-              </div>
-            </Section>
+            <SeedInput seed={form.seed} random={form.randomSeed} onChange={(seed, randomSeed) => setForm({ seed, randomSeed })} />
             <Section label="CLIP skip">
               <div className="segmented">
                 {[1, 2].map((n) => (
@@ -216,34 +197,5 @@ export function ImagePanel({ form, setForm, checkpoints, samplers, onGenerate, s
         </button>
       </div>
     </aside>
-  );
-}
-
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="section">
-      <div className="section-label">{label}</div>
-      {children}
-    </div>
-  );
-}
-
-function Slider(props: { label: string; min: number; max: number; step: number; value: number; onChange: (v: number) => void }) {
-  return (
-    <div className="section">
-      <div className="section-label slider-label">
-        {props.label}
-        <span className="slider-value">{props.value}</span>
-      </div>
-      <input
-        type="range"
-        className="range"
-        min={props.min}
-        max={props.max}
-        step={props.step}
-        value={props.value}
-        onChange={(e) => props.onChange(Number(e.target.value))}
-      />
-    </div>
   );
 }
