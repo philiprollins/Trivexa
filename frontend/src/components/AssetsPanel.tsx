@@ -61,6 +61,7 @@ export function AssetsPanel(p: Props) {
                   onClick={() => p.onSelect({ kind: "asset", id: a.id })}
                 >
                   <img src={a.thumb_url} alt={a.prompt} loading="lazy" />
+                  {a.kind === "multiview" && <span className="tile-badge">MV</span>}
                   <button
                     className={`tile-star ${a.favorite ? "on" : ""}`}
                     onClick={(e) => {
@@ -96,22 +97,31 @@ export function AssetsPanel(p: Props) {
 function Details({ asset }: { asset: Asset | null }) {
   if (!asset) return <p className="hint center">Select an asset to see its settings.</p>;
   const pr = asset.params;
+  const mv = asset.kind === "multiview";
   const rows: [string, string | number][] = [
+    ...(mv ? ([["Type", pr.mode === "i2mv" ? "Image → multiview" : "Text → multiview"]] as [string, string][]) : []),
     ["Model", pr.model_name ?? pr.model],
     ["Architecture", pr.arch === "sd15" ? "SD 1.5" : "SDXL"],
-    ["Size", `${asset.width} × ${asset.height}`],
+    [mv ? "View size" : "Size", `${asset.width} × ${asset.height}`],
     ["Seed", asset.seed],
     ["Steps", pr.steps],
     ["CFG", pr.cfg],
     ["Sampler", pr.sampler_label ?? pr.sampler],
-    ["CLIP skip", pr.clip_skip],
+    ...(mv
+      ? pr.mode === "i2mv"
+        ? ([
+            ["Background", pr.remove_bg ? "Removed" : "Kept"],
+            ["Reference strength", pr.reference_scale ?? 1],
+          ] as [string, string | number][])
+        : []
+      : ([["CLIP skip", pr.clip_skip]] as [string, number][])),
     ["Created", new Date(asset.created_at * 1000).toLocaleString()],
   ];
   return (
     <div className="details">
       <div className="detail-block">
         <div className="section-label">Prompt</div>
-        <p className="detail-text">{asset.prompt}</p>
+        <p className="detail-text">{asset.prompt || "—"}</p>
       </div>
       {asset.negative && (
         <div className="detail-block">

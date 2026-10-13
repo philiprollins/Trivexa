@@ -26,9 +26,26 @@ export interface ImageParams {
   sampler_label?: string;
 }
 
+export interface MultiviewParams {
+  mode: "t2mv" | "i2mv";
+  prompt: string;
+  negative: string;
+  model: string;
+  steps: number;
+  cfg: number;
+  sampler: string;
+  seed: number;
+  reference_asset?: string | null;
+  remove_bg?: boolean;
+  reference_scale?: number;
+  azimuths?: number[];
+  model_name?: string;
+  sampler_label?: string;
+}
+
 export interface Asset {
   id: string;
-  kind: "image" | "model3d";
+  kind: "image" | "multiview";
   created_at: number;
   file: string;
   url: string;
@@ -39,16 +56,19 @@ export interface Asset {
   negative: string;
   model: string;
   seed: number;
-  params: ImageParams;
+  params: ImageParams & Partial<MultiviewParams>;
   favorite: boolean;
+  parent_id: string | null;
+  views?: { azimuth: number; url: string }[];
+  reference_url?: string;
 }
 
 export type JobStatus = "queued" | "loading" | "running" | "done" | "error" | "cancelled";
 
 export interface Job {
   id: string;
-  kind: string;
-  params: ImageParams;
+  kind: "image" | "multiview";
+  params: ImageParams & Partial<MultiviewParams>;
   status: JobStatus;
   step: number;
   total: number;
@@ -63,11 +83,21 @@ export interface Job {
 export interface Status {
   gpu: { name: string; vram_free: number; vram_total: number } | null;
   loaded_model: string | null;
-  loaded_arch: "sdxl" | "sd15" | null;
   pending_jobs: number;
   models_dir: string;
   outputs_dir: string;
 }
+
+export interface MultiviewSupport {
+  t2mv: boolean;
+  i2mv: boolean;
+  bg_removal: boolean;
+}
+
+export type MultiviewRequest = Omit<MultiviewParams, "azimuths" | "model_name" | "sampler_label"> & {
+  count: number;
+  reference_image?: string | null;
+};
 
 export const isActive = (j: Job) => j.status === "queued" || j.status === "loading" || j.status === "running";
 
@@ -92,10 +122,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   status: () => request<Status>("/api/status"),
   unload: () => request("/api/unload", { method: "POST" }),
-  models: () => request<{ checkpoints: Checkpoint[] }>("/api/models"),
+  models: () => request<{ checkpoints: Checkpoint[]; multiview: MultiviewSupport }>("/api/models"),
   samplers: () => request<{ samplers: Sampler[] }>("/api/samplers"),
   generateImage: (params: Omit<ImageParams, "model_name" | "sampler_label" | "arch"> & { count: number }) =>
     request<{ jobs: Job[] }>("/api/generate/image", { method: "POST", body: JSON.stringify(params) }),
+  generateMultiview: (params: MultiviewRequest) =>
+    request<{ jobs: Job[] }>("/api/generate/multiview", { method: "POST", body: JSON.stringify(params) }),
   cancelJob: (id: string) => request(`/api/jobs/${id}/cancel`, { method: "POST" }),
   assets: (opts: { favorite?: boolean; limit?: number; offset?: number } = {}) => {
     const q = new URLSearchParams();
@@ -104,6 +136,7 @@ export const api = {
     q.set("offset", String(opts.offset ?? 0));
     return request<{ assets: Asset[] }>(`/api/assets?${q}`);
   },
+  asset: (id: string) => request<Asset>(`/api/assets/${id}`),
   setFavorite: (id: string, favorite: boolean) =>
     request<Asset>(`/api/assets/${id}`, { method: "PATCH", body: JSON.stringify({ favorite }) }),
   deleteAsset: (id: string) => request(`/api/assets/${id}`, { method: "DELETE" }),
