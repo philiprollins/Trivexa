@@ -47,8 +47,10 @@ export interface Model3DParams {
   source_asset?: string | null;
   source_view?: number;
   remove_bg: boolean;
-  foreground_ratio: number;
-  mc_resolution: number;
+  foreground_ratio?: number; // TripoSR
+  mc_resolution?: number;
+  octree_depth?: number; // TripoSG
+  face_limit?: number;
   engine: string;
   vertices?: number;
   faces?: number;
@@ -169,7 +171,7 @@ export const api = {
     request<{
       checkpoints: Checkpoint[];
       multiview: MultiviewSupport;
-      model3d: { triposr: boolean; meshflow: boolean; meshflow_image: boolean; skintokens: boolean };
+      model3d: { triposr: boolean; triposg: boolean; meshflow: boolean; meshflow_image: boolean; skintokens: boolean };
       texture: TextureBaker;
     }>("/api/models"),
   samplers: () => request<{ samplers: Sampler[] }>("/api/samplers"),
@@ -182,8 +184,14 @@ export const api = {
     source_view?: number;
     source_image?: string | null;
     remove_bg: boolean;
-    foreground_ratio: number;
-    mc_resolution: number;
+    engine: "triposr" | "triposg";
+    foreground_ratio?: number;
+    mc_resolution?: number;
+    steps?: number;
+    guidance?: number;
+    seed?: number;
+    octree_depth?: number;
+    face_limit?: number;
   }) => request<{ jobs: Job[] }>("/api/generate/3d", { method: "POST", body: JSON.stringify(params) }),
   generateTexture: (params: {
     source_asset: string;

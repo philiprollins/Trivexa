@@ -1,13 +1,31 @@
-import { Box, ImagePlus, X, Zap } from "lucide-react";
+import { Box, ChevronDown, ImagePlus, X, Zap } from "lucide-react";
 import { useRef, useState } from "react";
 import type { Asset } from "../api";
-import { Section, Segmented, Slider } from "./controls";
+import { SeedInput, Section, Segmented, Slider } from "./controls";
+
+export type Engine3D = "triposr" | "triposg";
 
 export interface Model3DForm {
+  engine: Engine3D;
   removeBg: boolean;
+  // TripoSR
   foregroundRatio: number;
   resolution: number;
+  // TripoSG
+  octreeDepth: 8 | 9;
+  faceLimit: number; // 0 = keep every face
+  steps: number;
+  guidance: number;
+  seed: number;
+  randomSeed: boolean;
 }
+
+const FACE_LIMITS = [
+  { value: 50_000, label: "50k" },
+  { value: 200_000, label: "200k" },
+  { value: 500_000, label: "500k" },
+  { value: 0, label: "Full" },
+];
 
 export type Source3D =
   | { type: "asset"; asset: Asset; view: number }
@@ -19,7 +37,7 @@ interface Props {
   source: Source3D | null;
   setSource: (s: Source3D | null) => void;
   selected: Asset | null; // image or multiview asset currently selected in the gallery
-  available: boolean;
+  available: Record<Engine3D, boolean>;
   bgAvailable: boolean;
   onGenerate: () => void;
   submitting: boolean;
@@ -37,8 +55,10 @@ export function sourcePreview(s: Source3D): string {
 export function Model3DPanel(p: Props) {
   const { form, setForm, source } = p;
   const [dragging, setDragging] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const canGenerate = p.available && source !== null && !(form.removeBg && !p.bgAvailable) && !p.submitting;
+  const sg = form.engine === "triposg";
+  const canGenerate = p.available[form.engine] && source !== null && !(form.removeBg && !p.bgAvailable) && !p.submitting;
 
   const readFile = (file: File | undefined) => {
     if (!file) return;
@@ -112,14 +132,28 @@ export function Model3DPanel(p: Props) {
                 </option>
               ))}
             </select>
-            <p className="hint">TripoSR reconstructs from a single image; the front view usually works best.</p>
+            <p className="hint">Both engines reconstruct from a single image; the front view usually works best.</p>
           </Section>
         )}
 
         <Section label="Engine">
+          <Segmented
+            options={[
+              { value: "triposg", label: "TripoSG" },
+              { value: "triposr", label: "TripoSR" },
+            ]}
+            value={form.engine}
+            onChange={(engine) => setForm({ engine })}
+          />
           <div className="engine-card">
-            <strong>TripoSR</strong>
-            <span>Fast single-image reconstruction · vertex colours · good for prototypes and small props</span>
+            {sg ? (
+              <span>
+                High-fidelity shape from a 1.5B flow model · sharp detail and clean surfaces · no colour (texture it
+                next) · ~30–60 s
+              </span>
+            ) : (
+              <span>Fast single-image reconstruction · vertex colours · soft shapes · good for quick prototypes</span>
+            )}
           </div>
         </Section>
 
@@ -134,30 +168,78 @@ export function Model3DPanel(p: Props) {
           />
         </Section>
 
-        <Slider
-          label="Subject fill"
-          min={0.5}
-          max={1}
-          step={0.05}
-          value={form.foregroundRatio}
-          onChange={(foregroundRatio) => setForm({ foregroundRatio })}
-        />
+        {sg ? (
+          <>
+            <Section label="Mesh resolution">
+              <Segmented
+                options={[
+                  { value: 8, label: "256" },
+                  { value: 9, label: "512" },
+                ]}
+                value={form.octreeDepth}
+                onChange={(octreeDepth) => setForm({ octreeDepth })}
+              />
+              <p className="hint">Surface grid size. 512 keeps fine detail; 256 is quicker and softer.</p>
+            </Section>
 
-        <Section label="Mesh resolution">
-          <Segmented
-            options={[192, 256, 320, 384].map((n) => ({ value: n, label: n }))}
-            value={form.resolution}
-            onChange={(resolution) => setForm({ resolution })}
-          />
-          <p className="hint">Marching-cubes grid size. Higher gives finer surfaces and larger files.</p>
-        </Section>
+            <Section label="Face limit">
+              <Segmented options={FACE_LIMITS} value={form.faceLimit} onChange={(faceLimit) => setForm({ faceLimit })} />
+              <p className="hint">Decimates the raw mesh (often over a million faces) to keep files and later steps light.</p>
+            </Section>
 
-        {!p.available && (
-          <p className="notice">
-            TripoSR weights not found. Expected <code>config.yaml</code>, <code>model.ckpt</code> and{" "}
-            <code>dino/config.json</code> in <code>models/triposr</code>.
-          </p>
+            <button className="collapse-head" onClick={() => setShowAdvanced((v) => !v)}>
+              Sampling settings
+              <ChevronDown size={16} className={showAdvanced ? "rot" : ""} />
+            </button>
+            {showAdvanced && (
+              <div className="advanced">
+                <Slider label="Steps" min={10} max={100} step={1} value={form.steps} onChange={(steps) => setForm({ steps })} />
+                <Slider
+                  label="Guidance"
+                  min={1}
+                  max={12}
+                  step={0.5}
+                  value={form.guidance}
+                  onChange={(guidance) => setForm({ guidance })}
+                />
+                <SeedInput seed={form.seed} random={form.randomSeed} onChange={(seed, randomSeed) => setForm({ seed, randomSeed })} />
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <Slider
+              label="Subject fill"
+              min={0.5}
+              max={1}
+              step={0.05}
+              value={form.foregroundRatio}
+              onChange={(foregroundRatio) => setForm({ foregroundRatio })}
+            />
+
+            <Section label="Mesh resolution">
+              <Segmented
+                options={[192, 256, 320, 384].map((n) => ({ value: n, label: n }))}
+                value={form.resolution}
+                onChange={(resolution) => setForm({ resolution })}
+              />
+              <p className="hint">Marching-cubes grid size. Higher gives finer surfaces and larger files.</p>
+            </Section>
+          </>
         )}
+
+        {!p.available[form.engine] &&
+          (sg ? (
+            <p className="notice">
+              TripoSG weights not found in <code>data/models/triposg</code>. Run{" "}
+              <code>uv run python -m trivexa.download triposg</code>.
+            </p>
+          ) : (
+            <p className="notice">
+              TripoSR weights not found. Expected <code>config.yaml</code>, <code>model.ckpt</code> and{" "}
+              <code>dino/config.json</code> in <code>models/triposr</code>.
+            </p>
+          ))}
       </div>
 
       <div className="panel-footer">

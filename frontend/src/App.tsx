@@ -54,7 +54,19 @@ const DEFAULT_MV_FORM: MultiviewForm = {
   referenceScale: 1,
 };
 
-const DEFAULT_3D_FORM: Model3DForm = { removeBg: true, foregroundRatio: 0.85, resolution: 256 };
+// TripoSG's upstream sampling defaults (50 steps, guidance 7); the face limit keeps meshes light for later tools.
+const DEFAULT_3D_FORM: Model3DForm = {
+  engine: "triposg",
+  removeBg: true,
+  foregroundRatio: 0.85,
+  resolution: 256,
+  octreeDepth: 9,
+  faceLimit: 200_000,
+  steps: 50,
+  guidance: 7,
+  seed: 0,
+  randomSeed: true,
+};
 
 // MeshFlow's bundled config: 28 steps, image guidance 2.5.
 const DEFAULT_REMESH_FORM: RemeshForm = {
@@ -132,7 +144,7 @@ export default function App() {
   const [mvSupport, setMvSupport] = useState<MultiviewSupport | null>(null);
   const [form3d, setForm3d] = usePersistentForm<Model3DForm>("trivexa.model3dForm", DEFAULT_3D_FORM);
   const [source3d, setSource3d] = useState<Source3D | null>(null);
-  const [tripoAvailable, setTripoAvailable] = useState(false);
+  const [model3dAvailable, setModel3dAvailable] = useState({ triposr: false, triposg: false });
   const [meshflowAvailable, setMeshflowAvailable] = useState(false);
   const [meshflowImageAvailable, setMeshflowImageAvailable] = useState(false);
   const [remeshForm, setRemeshForm] = usePersistentForm<RemeshForm>("trivexa.remeshForm", DEFAULT_REMESH_FORM);
@@ -191,7 +203,7 @@ export default function App() {
       setTextureBaker(texture);
       setCheckpoints(checkpoints);
       setMvSupport(multiview);
-      setTripoAvailable(model3d.triposr);
+      setModel3dAvailable({ triposr: model3d.triposr, triposg: model3d.triposg });
       setMeshflowAvailable(model3d.meshflow);
       setMeshflowImageAvailable(model3d.meshflow_image);
       setSkintokensAvailable(model3d.skintokens);
@@ -295,8 +307,16 @@ export default function App() {
         source_view: source3d.type === "asset" ? source3d.view : 0,
         source_image: source3d.type === "upload" ? source3d.dataUrl : null,
         remove_bg: form3d.removeBg,
-        foreground_ratio: form3d.foregroundRatio,
-        mc_resolution: form3d.resolution,
+        engine: form3d.engine,
+        ...(form3d.engine === "triposg"
+          ? {
+              steps: form3d.steps,
+              guidance: form3d.guidance,
+              seed: form3d.randomSeed ? -1 : form3d.seed,
+              octree_depth: form3d.octreeDepth,
+              face_limit: form3d.faceLimit,
+            }
+          : { foreground_ratio: form3d.foregroundRatio, mc_resolution: form3d.resolution }),
       });
       if (created[0]) setSelection({ kind: "job", id: created[0].id });
       setTab("assets");
@@ -569,7 +589,7 @@ export default function App() {
             source={source3d}
             setSource={setSource3d}
             selected={selectedAsset}
-            available={tripoAvailable}
+            available={model3dAvailable}
             bgAvailable={mvSupport?.bg_removal ?? false}
             onGenerate={generate3d}
             submitting={submitting}

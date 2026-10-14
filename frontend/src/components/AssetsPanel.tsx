@@ -149,6 +149,7 @@ function Details({ asset }: { asset: Asset | null }) {
 
 const ENGINE_NAMES: Record<string, string> = {
   triposr: "TripoSR",
+  triposg: "TripoSG",
   meshflow: "MeshFlow remesh",
   "mv-adapter": "MV-Adapter texture",
   skintokens: "SkinTokens rig",
@@ -192,10 +193,18 @@ function Model3DDetails({ asset }: { asset: Asset }) {
             ["Seed", pr.seed ?? "—"],
             ["Small holes", pr.fill_holes ? "Filled" : "Left open"],
           ] as [string, string | number][])
-        : ([
-            ["Mesh resolution", pr.mc_resolution ?? "—"],
-            ["Subject fill", pr.foreground_ratio ?? "—"],
-          ] as [string, string | number][])),
+        : pr.engine === "triposg"
+          ? ([
+              ["Mesh resolution", pr.octree_depth ? 2 ** pr.octree_depth : "—"],
+              ["Face limit", pr.face_limit ? pr.face_limit.toLocaleString() : "None"],
+              ["Steps", pr.steps ?? "—"],
+              ["Guidance", pr.guidance ?? "—"],
+              ["Seed", pr.seed ?? "—"],
+            ] as [string, string | number][])
+          : ([
+              ["Mesh resolution", pr.mc_resolution ?? "—"],
+              ["Subject fill", pr.foreground_ratio ?? "—"],
+            ] as [string, string | number][])),
     ...(pr.remove_bg === undefined ? [] : ([["Background", pr.remove_bg ? "Removed" : "Kept"]] as [string, string][])),
     ["Created", new Date(asset.created_at * 1000).toLocaleString()],
   ];
