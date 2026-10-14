@@ -33,6 +33,12 @@ log = logging.getLogger(__name__)
 
 DEFAULT_STEPS = 28  # the bundled config's num_inference_steps
 DEFAULT_GUIDANCE = 2.5  # the bundled config's guidance_scale (CFG on the image condition)
+# Latent sequence length = surface points sampled = the most vertices the decoder can emit. The checkpoint was
+# trained at 4096 and has no vertex-count input (use_proj_cond_on_temb is off), but every layer is length-agnostic
+# (RoPE, no learned positions), and a longer sequence gives curved shapes a denser mesh (flat, hard-surface ones
+# barely change). Measured on a robot, a teapot and a chair (image-guided): 3072 ~0.8x faces, 6144 ~1.6x,
+# 8192 ~3-6x with many more non-manifold edges; 2048 and below start tearing holes.
+DETAIL_LENGTHS = {"low": 3072, "normal": 4096, "high": 6144, "max": 8192}
 # The backbone MeshFlow's config names (visual_condition.hub_model: dinov3_vitl16), from Meta's DINOv3 downloads.
 DINOV3_WEIGHTS = MESHFLOW_DIR / "dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
 
@@ -45,6 +51,7 @@ class MeshFlowParams:
     fill_holes: bool = False
     image: Image.Image | None = None  # reference, already cut out and flattened (see prepare_reference)
     guidance: float = DEFAULT_GUIDANCE
+    length: int = DETAIL_LENGTHS["normal"]  # see DETAIL_LENGTHS
 
 
 def available() -> bool:
@@ -163,7 +170,7 @@ class MeshFlowEngine:
         center = (src.vertices.min(0) + src.vertices.max(0)) / 2
         radius = float(np.linalg.norm(src.vertices - center, axis=1).max())
         unit = trimesh.Trimesh((src.vertices - center) / radius, src.faces, process=False)
-        points, _ = trimesh.sample.sample_surface(unit, pipe.num_verts, seed=p.seed)
+        points, _ = trimesh.sample.sample_surface(unit, p.length, seed=p.seed)
         surface = torch.from_numpy(points.astype(np.float32)).unsqueeze(0).to(self.device)
 
         guidance = p.guidance if p.image is not None else 1.0  # CFG only mixes in the image condition
@@ -179,7 +186,7 @@ class MeshFlowEngine:
                 flow_sample(
                     pipe.scheduler,
                     denoiser,
-                    (denoiser.input_size, denoiser.in_channels),
+                    (p.length, denoiser.in_channels),
                     steps=p.steps,
                     visual_cond=visual_cond,
                     guidance_scale=guidance,
