@@ -361,6 +361,7 @@ class RemeshRequest(BaseModel):
     seed: int = Field(-1, ge=-1, le=2**32 - 1)
     count: int = Field(1, ge=1, le=8)
     fill_holes: bool = False
+    detail: Literal["low", "normal", "high", "max"] = "normal"  # latent length, see meshflow.DETAIL_LENGTHS
     # Image guidance (DINOv3): the model's own input image by default, or a gallery image / upload.
     use_image: bool = True
     reference_asset: str | None = None
@@ -430,6 +431,7 @@ def _remesh_runner(
                 steps=params["steps"],
                 seed=params["seed"],
                 fill_holes=params["fill_holes"],
+                length=meshflow_engine.DETAIL_LENGTHS[params["detail"]],
                 image=reference,
                 guidance=params.get("guidance", 1.0),
             ),
