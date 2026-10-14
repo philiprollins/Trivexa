@@ -1,8 +1,10 @@
 """Multi-view generation with MV-Adapter on top of a local SDXL checkpoint.
 
-Two modes, each with its own adapter weights:
-  t2mv  text -> 6 orthographic views
-  i2mv  reference image (+ optional text) -> 6 views consistent with the reference
+Modes, each with its own adapter weights:
+  t2mv   text -> 6 orthographic views
+  i2mv   reference image (+ optional text) -> 6 views consistent with the reference
+  ig2mv  reference image + mesh condition maps -> 6 views for texturing that mesh
+  tg2mv  text + mesh condition maps -> 6 views for texturing that mesh
 """
 
 import logging
@@ -32,6 +34,7 @@ MODES = {
     # Geometry-guided: conditioned on position/normal maps rendered from a mesh (incl. top/bottom views),
     # so it needs row+column attention. Used for texturing; the caller supplies the condition maps.
     "ig2mv": (MVAdapterI2MVSDXLPipeline, "mvadapter_ig2mv_sdxl.safetensors", DecoupledMVRowColSelfAttnProcessor2_0),
+    "tg2mv": (MVAdapterT2MVSDXLPipeline, "mvadapter_tg2mv_sdxl.safetensors", DecoupledMVRowColSelfAttnProcessor2_0),
 }
 # Front, front-right, right, back, left, front-left (degrees around the object).
 AZIMUTHS = [0, 45, 90, 180, 270, 315]
@@ -54,7 +57,7 @@ class MVParams:
     seed: int
     reference: Image.Image | None = None  # i2mv/ig2mv, already preprocessed to VIEW_SIZE
     reference_scale: float = 1.0
-    control_images: torch.Tensor | None = None  # ig2mv: (6, 6, H, W) position+normal maps in [0, 1]
+    control_images: torch.Tensor | None = None  # ig2mv/tg2mv: (6, 6, H, W) position+normal maps in [0, 1]
 
 
 def prepare_reference(rgba: Image.Image, size: int = VIEW_SIZE) -> Image.Image:

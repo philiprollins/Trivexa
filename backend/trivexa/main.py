@@ -116,6 +116,7 @@ def list_models():
             "t2mv": adapter_available("t2mv"),
             "i2mv": adapter_available("i2mv"),
             "ig2mv": adapter_available("ig2mv"),
+            "tg2mv": adapter_available("tg2mv"),
             "bg_removal": bg_remover.available(),
         },
         "model3d": {"triposr": triposr.available()},
@@ -348,7 +349,8 @@ def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
 class TextureRequest(BaseModel):
     source_asset: str  # a 3D model asset
     model: str  # SDXL checkpoint for MV-Adapter
-    # Reference image: the model's own input image by default, or a gallery image / upload.
+    mode: Literal["ig2mv", "tg2mv"] = "ig2mv"  # guided by a reference image, or by the prompt alone
+    # ig2mv reference image: the model's own input image by default, or a gallery image / upload.
     reference_asset: str | None = None
     reference_image: str | None = Field(None, max_length=40_000_000)
     remove_bg: bool = True
@@ -374,17 +376,23 @@ async def generate_texture(req: TextureRequest):
         raise HTTPException(400, f"{e} (MV-Adapter needs an SDXL checkpoint)") from e
     if req.sampler not in SAMPLERS:
         raise HTTPException(400, f"Unknown sampler: {req.sampler}")
-    if not adapter_available("ig2mv"):
-        raise HTTPException(400, "MV-Adapter ig2mv weights are not downloaded")
-    if req.remove_bg and not bg_remover.available():
-        raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
-    if req.reference_asset or req.reference_image:
-        reference, _ = _load_source_image(req.reference_asset, req.reference_image)
+    if not adapter_available(req.mode):
+        raise HTTPException(400, f"MV-Adapter {req.mode} weights are not downloaded")
+    reference = None
+    if req.mode == "tg2mv":
+        if not req.prompt.strip():
+            raise HTTPException(400, "Describe the texture: the prompt is all tg2mv has to go on")
     else:
-        reference = Image.open(OUTPUTS_DIR / source["input_url"].removeprefix("/files/")).copy()
+        if req.remove_bg and not bg_remover.available():
+            raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
+        if req.reference_asset or req.reference_image:
+            reference, _ = _load_source_image(req.reference_asset, req.reference_image)
+        else:
+            reference = Image.open(OUTPUTS_DIR / source["input_url"].removeprefix("/files/")).copy()
     mesh_path = OUTPUTS_DIR / source["model_urls"]["glb"].removeprefix("/files/")
 
-    params = req.model_dump(exclude={"reference_image"}) | {
+    image_only = {"reference_asset", "remove_bg", "reference_scale"} if req.mode == "tg2mv" else set()
+    params = req.model_dump(exclude={"reference_image"} | image_only) | {
         "seed": random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed,
         "model_name": model_path.stem,
         "sampler_label": SAMPLERS[req.sampler][0],
@@ -396,7 +404,7 @@ async def generate_texture(req: TextureRequest):
     return {"jobs": [jobs.submit(job).public()]}
 
 
-def _texture_runner(model_path, mesh_path, reference_src: Image.Image, params: dict, parent_id: str):
+def _texture_runner(model_path, mesh_path, reference_src: Image.Image | None, params: dict, parent_id: str):
     def run(job: Job) -> dict:
         import trimesh
 
@@ -408,10 +416,12 @@ def _texture_runner(model_path, mesh_path, reference_src: Image.Image, params: d
         raster = texturing.Rasterizer(prepared)  # GL context lives on this worker thread
         try:
             pos_maps, nrm_maps = raster.render_views(768)
-            reference = prepare_reference(bg_remover.remove(reference_src) if params["remove_bg"] else reference_src)
+            reference = None
+            if reference_src is not None:
+                reference = prepare_reference(bg_remover.remove(reference_src) if params["remove_bg"] else reference_src)
             views = multiview.generate(
                 MVParams(
-                    mode="ig2mv",
+                    mode=params["mode"],
                     model_path=model_path,
                     prompt=params["prompt"] or "high quality",
                     negative=params["negative"],
@@ -420,7 +430,7 @@ def _texture_runner(model_path, mesh_path, reference_src: Image.Image, params: d
                     sampler=params["sampler"],
                     seed=params["seed"],
                     reference=reference,
-                    reference_scale=params["reference_scale"],
+                    reference_scale=params.get("reference_scale", 1.0),
                     control_images=texturing.condition_images(pos_maps, nrm_maps),
                 ),
                 on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
@@ -439,8 +449,9 @@ def _texture_runner(model_path, mesh_path, reference_src: Image.Image, params: d
         for i, view in enumerate(views):
             grid.paste(view, ((i % 3) * 768, (i // 3) * 768))
         params_out = params | {"vertices": len(out.vertices), "faces": len(out.faces), "textured": True}
+        # Without a reference image (tg2mv), the generated front view stands in as the model's input image.
         return store.save_model3d(
-            out, reference, params_out, parent_id, images={"texture": texture, "views": grid}
+            out, reference or views[0], params_out, parent_id, images={"texture": texture, "views": grid}
         )
 
     return run
