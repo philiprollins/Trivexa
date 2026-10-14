@@ -174,6 +174,7 @@ function Model3DDetails({ asset }: { asset: Asset }) {
         ? ([
             ["Source faces", pr.source_faces?.toLocaleString() ?? "—"],
             ["Guided by", pr.use_image ? `Shape + image (${pr.guidance})` : "Shape only"],
+            ["Detail", pr.detail ? pr.detail[0].toUpperCase() + pr.detail.slice(1) : "Normal"],
             ["Steps", pr.steps ?? "—"],
             ["Seed", pr.seed ?? "—"],
             ["Small holes", pr.fill_holes ? "Filled" : "Left open"],

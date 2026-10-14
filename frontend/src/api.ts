@@ -62,8 +62,11 @@ export interface Model3DParams {
   fill_holes?: boolean;
   source_faces?: number;
   use_image?: boolean; // remesh guided by a reference image (DINOv3)
+  detail?: RemeshDetail;
   guidance?: number;
 }
+
+export type RemeshDetail = "low" | "normal" | "high" | "max";
 
 export interface Asset {
   id: string;
@@ -197,6 +200,7 @@ export const api = {
     seed: number;
     count: number;
     fill_holes: boolean;
+    detail: RemeshDetail;
     use_image: boolean;
     reference_asset?: string | null;
     reference_image?: string | null;

@@ -59,6 +59,7 @@ const DEFAULT_3D_FORM: Model3DForm = { removeBg: true, foregroundRatio: 0.85, re
 const DEFAULT_REMESH_FORM: RemeshForm = {
   count: 1,
   fillHoles: false,
+  detail: "normal",
   steps: 28,
   seed: 0,
   randomSeed: true,
@@ -337,6 +338,7 @@ export default function App() {
         seed: remeshForm.randomSeed ? -1 : remeshForm.seed,
         count: remeshForm.count,
         fill_holes: remeshForm.fillHoles,
+        detail: remeshForm.detail,
         use_image: remeshForm.useImage && meshflowImageAvailable,
         reference_asset: remeshReference?.type === "asset" ? remeshReference.asset.id : null,
         reference_image: remeshReference?.type === "upload" ? remeshReference.dataUrl : null,

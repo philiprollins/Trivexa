@@ -1,12 +1,13 @@
 import { ChevronDown, ImagePlus, Pyramid, X, Zap } from "lucide-react";
 import { useRef, useState } from "react";
-import type { Asset } from "../api";
+import type { Asset, RemeshDetail } from "../api";
 import { SeedInput, Section, Segmented, Slider } from "./controls";
 import type { TextureReference } from "./TexturePanel";
 
 export interface RemeshForm {
   count: number;
   fillHoles: boolean;
+  detail: RemeshDetail;
   steps: number;
   seed: number;
   randomSeed: boolean;
@@ -32,6 +33,14 @@ interface Props {
 }
 
 const MAX_UPLOAD = 20 * 1024 * 1024;
+
+// Relative face counts and image-guided times measured on a robot, a teapot and a chair.
+const DETAIL_HINTS: Record<RemeshDetail, string> = {
+  low: "~0.8× the faces, ~7 s.",
+  normal: "What MeshFlow was trained for, ~10 s.",
+  high: "~1.6× the faces on curved shapes, ~17 s.",
+  max: "Experimental: 3–6× the faces on curved shapes but more overlapping faces, ~25 s.",
+};
 
 export function RemeshPanel(p: Props) {
   const { form, setForm, model } = p;
@@ -88,7 +97,7 @@ export function RemeshPanel(p: Props) {
           <div className="engine-card">
             <strong>MeshFlow</strong>
             <span>
-              Rebuilds the shape as a clean, artist-style low-poly mesh (~1–2k faces) · colours carry over from the
+              Rebuilds the shape as a clean, artist-style low-poly mesh (~1–2k faces at normal detail) · colours carry over from the
               source as vertex colours · texture it afterwards for detail
             </span>
           </div>
@@ -136,6 +145,23 @@ export function RemeshPanel(p: Props) {
             </div>
           </Section>
         )}
+
+        <Section label="Detail">
+          <Segmented
+            options={[
+              { value: "low", label: "Low" },
+              { value: "normal", label: "Normal" },
+              { value: "high", label: "High" },
+              { value: "max", label: "Max" },
+            ]}
+            value={form.detail}
+            onChange={(detail) => setForm({ detail })}
+          />
+          <p className="hint">
+            {DETAIL_HINTS[form.detail]} Sets how dense the mesh may get, not an exact face count; flat, hard-surface
+            parts stay simple.
+          </p>
+        </Section>
 
         <Section label="Variations">
           <Segmented
