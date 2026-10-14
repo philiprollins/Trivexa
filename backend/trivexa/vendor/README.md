@@ -11,6 +11,7 @@ Only the files needed for inference are included; local edits are marked `# Triv
 | `meshflow/` | https://github.com/facebookresearch/meshflow | `55f56f60e1bbf98d1c1991670ac998094d5f59ae` | FAIR Noncommercial Research (`meshflow/LICENSE`) |
 | `dinov3/` | https://github.com/facebookresearch/dinov3 | `6876159a11b4df116f30f667f8c9888617df0751` | DINOv3 License (`dinov3/LICENSE.md`) |
 | `skintokens/` | https://github.com/VAST-AI-Research/SkinTokens | `273b691d35989d71cd17ff2895fdc735097b92d1` | MIT (`skintokens/LICENSE`) |
+| `triposg/` | https://github.com/VAST-AI-Research/TripoSG | `fc5c40990181e2a756c4e0b1c2f4d6b5202faf8c` | MIT (`triposg/LICENSE`); the DiT is Tencent Hunyuan Community License (see below) |
 
 Weights are not vendored: MV-Adapter adapters are downloaded to `data/models/mv-adapter/`,
 BiRefNet weights are read from `<models dir>/background_removal/birefnet.safetensors`.
@@ -38,3 +39,13 @@ checkpoint (`data/models/skintokens/experiments/articulation_xl_quantization_256
 texture baker. It needs the optional `texture` dependencies; `mesh_utils/__init__.py` is kept empty so the camera
 helpers used elsewhere import without them. nvdiffrast (installed, not vendored) is under the NVIDIA Source Code
 License, which allows non-commercial use only.
+
+`triposg/` keeps `models/`, `schedulers/` and `inference_utils.py` (no pipelines, scripts or RMBG; Trivexa runs the
+sampling loop itself in `engines/triposg.py` and cuts images out with BiRefNet). Upstream's `triposg/LICENSE` is the
+Tencent FlashVDM Community License, which covers only the FlashVDM-derived fast decoder: that code (the flash
+attention processor, `flash_extract_geometry`) is removed, together with its diso dependency (CC BY-NC, compiled
+CUDA), so the repo's MIT `LICENSE` is the one kept. Meshing uses upstream's other path,
+`hierarchical_extract_geometry`, with PyMCubes in place of scikit-image. `models/transformers/triposg_transformer.py`
+is adapted from HunyuanDiT and keeps its Tencent Hunyuan Community License header: no license in the EU, and outputs
+must not be used to improve other large language models. Weights (`VAST-AI/TripoSG`, MIT) are read from
+`data/models/triposg/` in the Hub's diffusers layout.
