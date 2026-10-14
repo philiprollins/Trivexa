@@ -131,8 +131,9 @@ class TripoSGEngine:
         p: TripoSGParams,
         on_step: Callable[[int, int, str | None], None],
         is_cancelled: Callable[[], bool],
-    ) -> tuple[trimesh.Trimesh, Image.Image]:
-        """Return the mesh (Y-up, facing +Z) and the processed input image."""
+    ) -> tuple[trimesh.Trimesh, Image.Image, trimesh.Trimesh | None]:
+        """Return the mesh (Y-up, facing +Z), the processed input image, and the undecimated mesh if the face
+        limit reduced it (else None)."""
         self.load()
         cond = prepare_input(p.image)
         total = p.steps + 2  # + meshing + decimation/cleanup
@@ -172,9 +173,9 @@ class TripoSGEngine:
         on_step(p.steps + 1, total, None)
         torch.cuda.empty_cache()
 
-        mesh = trimesh.Trimesh(vertices, faces)
-        mesh = _simplify(mesh, p.faces)
-        if mesh.volume < 0:  # keep normals pointing outwards whatever the marching-cubes winding
-            mesh.invert()
+        full = trimesh.Trimesh(vertices, faces)
+        if full.volume < 0:  # keep normals pointing outwards whatever the marching-cubes winding
+            full.invert()
+        mesh = _simplify(full, p.faces)
         on_step(total, total, None)
-        return mesh, cond
+        return mesh, cond, (full if mesh is not full else None)

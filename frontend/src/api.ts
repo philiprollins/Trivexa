@@ -51,6 +51,7 @@ export interface Model3DParams {
   mc_resolution?: number;
   octree_depth?: number; // TripoSG
   face_limit?: number;
+  full_faces?: number; // faces of the undecimated mesh (model_urls.glb_full)
   engine: string;
   vertices?: number;
   faces?: number;
@@ -95,7 +96,7 @@ export interface Asset {
   parent_id: string | null;
   views?: { azimuth: number; url: string }[];
   reference_url?: string;
-  model_urls?: { glb: string; obj: string };
+  model_urls?: { glb: string; obj: string; glb_full?: string }; // glb_full: undecimated TripoSG mesh
   input_url?: string;
   image_urls?: { texture?: string; views?: string };
   thumb_rendered?: boolean;

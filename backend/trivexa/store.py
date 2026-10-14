@@ -155,11 +155,14 @@ class Store:
         parent_id: str | None = None,
         images: dict[str, Image.Image] | None = None,
         glb: bytes | None = None,
+        full_mesh=None,
     ) -> dict:
         """GLB (for the viewer) and OBJ (for DCC tools; textured meshes also get .mtl + texture PNG) plus the
         input image and any extra named images (e.g. a baked texture), one folder per model.
 
         `glb` replaces the GLB exported from `mesh` (e.g. one carrying a skin, which the OBJ cannot hold).
+        `full_mesh` is the undecimated mesh `mesh` was reduced from, kept as model_full.glb (GLB only: an OBJ of a
+        million faces is ~3x larger).
 
         The thumbnail starts as the input image; the UI replaces it with a render of the model (set_thumbnail).
         """
@@ -172,6 +175,9 @@ class Store:
                 (OUTPUTS_DIR / rel).write_bytes(glb)
             else:
                 mesh.export(OUTPUTS_DIR / rel)
+        if full_mesh is not None:
+            files["glb_full"] = rel_dir / "model_full.glb"
+            full_mesh.export(OUTPUTS_DIR / files["glb_full"])
         rel_input = rel_dir / "input.png"
         input_image.save(OUTPUTS_DIR / rel_input)
         rel_images = {}

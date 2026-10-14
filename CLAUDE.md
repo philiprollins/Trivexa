@@ -98,7 +98,9 @@ anything else resident.
   in half the time (512³: ~11 s, ~850k faces, watertight). Untextured; output is already Y-up facing +Z (no
   rotation). "Face limit" decimates with pymeshlab `preservetopology=True` and without upstream's
   `merge_close_vertices`, both of which otherwise break watertightness (~9 s for 850k → 200k). ~3.7 GB resident,
-  ~5.3 GB peak. `params.face_limit` is the request; `params.faces` stays the saved mesh's count.
+  ~5.3 GB peak. `params.face_limit` is the request; `params.faces` stays the saved mesh's count. When the limit
+  reduced the mesh, the raw one is kept as `model_full.glb` (`model_urls.glb_full`, `params.full_faces`, ~15 MB at
+  850k faces; no OBJ). Remesh reads it in preference to `model.glb`; Texture and Rig use the decimated mesh.
 - `meshflow.py` — MeshFlow DiT + MeshVAE decoder, optionally guided by a reference image encoded with DINOv3
   ViT-L/16 (built locally instead of via torch.hub; CFG 2.5 on the image condition, ~10 s; shape-only ~5 s, no CFG).
   The image is cut out with BiRefNet and flattened on white (`prepare_reference(..., background=1.0)`). The checkpoint

@@ -379,8 +379,9 @@ def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
         _exclusive(engine)
         image = bg_remover.remove(source) if params["remove_bg"] else source
         on_step = lambda step, total, preview: jobs.report_step(job, step, total, preview)  # noqa: E731
+        full = None
         if engine is tripo_sg:
-            mesh, processed = tripo_sg.generate(
+            mesh, processed, full = tripo_sg.generate(
                 TripoSGParams(
                     image=image,
                     steps=params["steps"],
@@ -397,7 +398,8 @@ def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
                 TripoSRParams(image=image, foreground_ratio=params["foreground_ratio"], mc_resolution=params["mc_resolution"]),
                 on_step=on_step,
             )
-        return store.save_model3d(mesh, processed, params, parent_id)
+        extra = {"full_faces": len(full.faces)} if full is not None else {}
+        return store.save_model3d(mesh, processed, params | extra, parent_id, full_mesh=full)
 
     return run
 
@@ -424,7 +426,9 @@ async def generate_remesh(req: RemeshRequest):
         raise HTTPException(400, "Choose a 3D model to remesh")
     if not meshflow_engine.available():
         raise HTTPException(400, "MeshFlow weights not found (data/models/meshflow)")
-    mesh_path = OUTPUTS_DIR / source["model_urls"]["glb"].removeprefix("/files/")
+    # MeshFlow samples the surface, so it gets the undecimated mesh when one was kept (TripoSG face limit).
+    mesh_url = source["model_urls"].get("glb_full") or source["model_urls"]["glb"]
+    mesh_path = OUTPUTS_DIR / mesh_url.removeprefix("/files/")
     input_image = Image.open(OUTPUTS_DIR / source["input_url"].removeprefix("/files/")).copy()
     reference = None
     if req.use_image:
@@ -448,7 +452,7 @@ async def generate_remesh(req: RemeshRequest):
             "engine": sp.get("engine", "mesh").removesuffix(" + mv-adapter") + " + meshflow",
             "front": "+z",
             "remeshed": True,
-            "source_faces": sp.get("faces"),
+            "source_faces": sp.get("full_faces", sp.get("faces")),  # the mesh MeshFlow read (see mesh_url)
         }
         run = _remesh_runner(mesh_path, reference or input_image, reference, half_turn, params, source["id"])
         job = Job(kind="remesh", params=params, run=run)

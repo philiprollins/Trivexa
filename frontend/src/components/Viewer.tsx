@@ -235,6 +235,16 @@ export function Viewer(props: Props) {
               <a className="tool-btn" href={asset.model_urls.glb} download title={`Download GLB (${asset.params.textured ? "textured" : "vertex colours"}${asset.params.rigged ? ", rigged" : ""})`}>
                 <Download size={15} /> GLB
               </a>
+              {asset.model_urls.glb_full && (
+                <a
+                  className="tool-btn"
+                  href={asset.model_urls.glb_full}
+                  download
+                  title={`Download the full mesh before the face limit (${asset.params.full_faces?.toLocaleString() ?? "?"} faces)`}
+                >
+                  <Download size={15} /> Full GLB
+                </a>
+              )}
               {asset.params.textured ? (
                 <a className="tool-btn" href={`/api/assets/${asset.id}/obj.zip`} download title="Download OBJ + MTL + texture (zip)">
                   <Download size={15} /> OBJ

@@ -197,6 +197,7 @@ function Model3DDetails({ asset }: { asset: Asset }) {
           ? ([
               ["Mesh resolution", pr.octree_depth ? 2 ** pr.octree_depth : "—"],
               ["Face limit", pr.face_limit ? pr.face_limit.toLocaleString() : "None"],
+              ...(pr.full_faces ? ([["Full mesh", `${pr.full_faces.toLocaleString()} faces`]] as [string, string][]) : []),
               ["Steps", pr.steps ?? "—"],
               ["Guidance", pr.guidance ?? "—"],
               ["Seed", pr.seed ?? "—"],
@@ -236,6 +237,7 @@ function Model3DDetails({ asset }: { asset: Asset }) {
         <div className="section-label">Files</div>
         <p className="detail-text mono">{asset.model_urls?.glb.replace("/files/", "")}</p>
         <p className="detail-text mono">{asset.model_urls?.obj.replace("/files/", "")}</p>
+        {asset.model_urls?.glb_full && <p className="detail-text mono">{asset.model_urls.glb_full.replace("/files/", "")}</p>}
       </div>
     </div>
   );
