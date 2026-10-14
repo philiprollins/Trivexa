@@ -22,8 +22,10 @@ from .config import CHECKPOINTS_DIR, FRONTEND_DIST, OUTPUTS_DIR, SETTINGS, SETTI
 from .engines.bg_removal import BackgroundRemover
 from .engines.diffusion import ARCHS, SAMPLERS, DiffusionEngine, GenParams
 from .engines import texture as texturing
+from .engines import meshflow as meshflow_engine
 from .engines import texture_upstream
 from .engines import triposr
+from .engines.meshflow import MeshFlowEngine, MeshFlowParams
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
 from .engines.triposr import TripoSREngine, TripoSRParams
 from .jobs import Job, JobManager
@@ -39,6 +41,7 @@ diffusion = DiffusionEngine()
 multiview = MultiviewEngine()
 bg_remover = BackgroundRemover()
 tripo = TripoSREngine()
+remesher = MeshFlowEngine()
 
 
 def _texture_baker() -> tuple[str, str | None]:
@@ -59,7 +62,7 @@ if TEXTURE_BAKER_NOTE:
 
 def _exclusive(keep) -> None:
     """Only one large pipeline on the GPU at a time: unload every engine except `keep`."""
-    for engine in (diffusion, multiview, tripo):
+    for engine in (diffusion, multiview, tripo, remesher):
         if engine is not keep:
             engine.unload()
 
@@ -97,6 +100,8 @@ def _loaded_label() -> str | None:
         return diffusion.model_path.stem
     if multiview.model_path:
         return f"{multiview.model_path.stem} · MV-Adapter {multiview.mode}"
+    if remesher.pipe is not None:
+        return "MeshFlow"
     return None
 
 
@@ -119,7 +124,7 @@ def list_models():
             "tg2mv": adapter_available("tg2mv"),
             "bg_removal": bg_remover.available(),
         },
-        "model3d": {"triposr": triposr.available()},
+        "model3d": {"triposr": triposr.available(), "meshflow": meshflow_engine.available()},
         "texture": {"baker": TEXTURE_BAKER, "note": TEXTURE_BAKER_NOTE},
     }
 
@@ -346,6 +351,60 @@ def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
     return run
 
 
+class RemeshRequest(BaseModel):
+    source_asset: str  # a 3D model asset
+    steps: int = Field(meshflow_engine.DEFAULT_STEPS, ge=4, le=100)
+    seed: int = Field(-1, ge=-1, le=2**32 - 1)
+    count: int = Field(1, ge=1, le=8)
+    fill_holes: bool = False
+
+
+@app.post("/api/generate/remesh")
+async def generate_remesh(req: RemeshRequest):
+    source = store.get(req.source_asset)
+    if not source or source["kind"] != "model3d":
+        raise HTTPException(400, "Choose a 3D model to remesh")
+    if not meshflow_engine.available():
+        raise HTTPException(400, "MeshFlow weights not found (data/models/meshflow)")
+    mesh_path = OUTPUTS_DIR / source["model_urls"]["glb"].removeprefix("/files/")
+    input_path = OUTPUTS_DIR / source["input_url"].removeprefix("/files/")
+    sp = source["params"]
+    # TripoSR models from before "front" was recorded face -Z: turn the remesh to face +Z like everything newer.
+    half_turn = sp.get("front") != "+z" and sp.get("engine") == "triposr"
+    base_seed = random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed
+    created = []
+    for i in range(req.count):
+        params = req.model_dump(exclude={"count"}) | {
+            "seed": (base_seed + i) % 2**32,
+            "engine": sp.get("engine", "mesh").removesuffix(" + mv-adapter") + " + meshflow",
+            "front": "+z",
+            "remeshed": True,
+            "source_faces": sp.get("faces"),
+        }
+        job = Job(kind="remesh", params=params, run=_remesh_runner(mesh_path, input_path, half_turn, params, source["id"]))
+        created.append(jobs.submit(job).public())
+    return {"jobs": created}
+
+
+def _remesh_runner(mesh_path, input_path, half_turn: bool, params: dict, parent_id: str):
+    def run(job: Job) -> dict:
+        import numpy as np
+        import trimesh
+
+        _exclusive(remesher)
+        mesh = trimesh.load(mesh_path, force="mesh")
+        if half_turn:
+            mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [0, 1, 0]))
+        out = remesher.generate(
+            MeshFlowParams(mesh=mesh, steps=params["steps"], seed=params["seed"], fill_holes=params["fill_holes"]),
+            on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
+            is_cancelled=job.cancel_requested.is_set,
+        )
+        return store.save_model3d(out, Image.open(input_path).copy(), params, parent_id)
+
+    return run
+
+
 class TextureRequest(BaseModel):
     source_asset: str  # a 3D model asset
     model: str  # SDXL checkpoint for MV-Adapter
@@ -396,7 +455,7 @@ async def generate_texture(req: TextureRequest):
         "seed": random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed,
         "model_name": model_path.stem,
         "sampler_label": SAMPLERS[req.sampler][0],
-        "engine": source["params"].get("engine", "mesh") + " + mv-adapter",
+        "engine": source["params"].get("engine", "mesh").removesuffix(" + mv-adapter") + " + mv-adapter",
         "front": "+z",
         "baker": TEXTURE_BAKER,
     }
