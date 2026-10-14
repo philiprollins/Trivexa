@@ -11,6 +11,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import torch
 import trimesh
 from PIL import Image
@@ -56,7 +57,12 @@ def bake(
     pipe = None
     try:
         local_mesh = work / "mesh.glb"  # the pipeline writes its unwrapped copy next to the input
-        shutil.copy(mesh_path, local_mesh)
+        mesh = trimesh.load(mesh_path, force="mesh", process=False)
+        manifold = _split_nonmanifold_edges(mesh)
+        if manifold is mesh:
+            shutil.copy(mesh_path, local_mesh)
+        else:
+            manifold.export(local_mesh)
         w, h = views[0].size
         row = Image.new("RGB", (w * len(views), h))
         for i, view in enumerate(views):
@@ -83,3 +89,23 @@ def bake(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _split_nonmanifold_edges(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Detach every face on an edge shared by more than two faces (it gets its own vertices).
+
+    UVAtlas segfaults on non-manifold edges, which MeshFlow remeshes have; detaching keeps the surface as is.
+    Returns the mesh itself when there is nothing to fix.
+    """
+    _, inverse, counts = np.unique(mesh.edges_sorted, axis=0, return_inverse=True, return_counts=True)
+    detach = np.zeros(len(mesh.faces), dtype=bool)
+    detach[mesh.edges_face[counts[inverse] > 2]] = True
+    if not detach.any():
+        return mesh
+    log.info("Detaching %d faces on non-manifold edges before UV unwrapping", detach.sum())
+    faces = mesh.faces.copy()
+    faces[detach] = len(mesh.vertices) + np.arange(detach.sum() * 3).reshape(-1, 3)
+    vertices = np.concatenate([mesh.vertices, mesh.vertices[mesh.faces[detach]].reshape(-1, 3)])
+    out = trimesh.Trimesh(vertices, faces, process=False)
+    out.remove_unreferenced_vertices()
+    return out
