@@ -12,10 +12,12 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
   (~2 s per mesh, vertex colours) from an upload, a gallery image or any view of a multiview set. Models open
   in an orbit viewer (colour / clay / wireframe) and download as GLB or OBJ. Rough, but fine for prototypes
   and small props.
-- **Remesh**: rebuilds a 3D model as a clean, artist-style low-poly mesh (~0.5–2k faces instead of TripoSR's
-  ~80k) with [MeshFlow](https://github.com/facebookresearch/meshflow), ~5 s per variation. Colours carry over as
-  vertex colours; texture the result afterwards. Each seed gives a different topology, so it can make up to 8
-  variations at once. Shapes are smoothed and very thin parts can disappear. MeshFlow is under the FAIR
+- **Remesh**: rebuilds a 3D model as a clean, artist-style low-poly mesh (~1–2.5k faces instead of TripoSR's
+  ~80k) with [MeshFlow](https://github.com/facebookresearch/meshflow). By default it is guided by the model's
+  input image (or another image) through DINOv3, which keeps thin parts and details such as antennae and fingers:
+  ~10 s per variation; shape-only guidance is ~5 s but smooths those away. The face count can't be set (the
+  released checkpoint has no vertex-count control); each seed gives a different topology and count, so make a few
+  variations. Colours carry over as vertex colours; texture the result afterwards. MeshFlow is under the FAIR
   Noncommercial Research License, which also covers its outputs.
 - **Texture**: gives a 3D model a proper UV texture from a reference image (by default the image it was made from)
   or from a prompt alone: MV-Adapter's geometry-guided `ig2mv` (image) or `tg2mv` (prompt) generates six views
@@ -43,7 +45,10 @@ cd backend && uv run python -m trivexa.download        # or: ... download t2mv i
 Files are pinned to a specific revision and checked against their published SHA-256. `esrgan` and `lama`
 (RealESRGAN x2 and LaMa, 261 MB) are the upstream texture baker's view upscaler and inpainter.
 `meshflow` and `meshflow-config` (4.5 GB) are Remesh's weights; the Hugging Face repo is gated, so accept its
-license on huggingface.co/facebook/meshflow and `hf auth login` first.
+license on huggingface.co/facebook/meshflow and `hf auth login` first. Image-guided remeshing also needs
+`dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth` (1.2 GB, ViT-L/16 LVD-1689M) in `data/models/meshflow/`; Meta hands
+out personal download links (https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/), so fetch it
+by hand. Without it Remesh is shape-only.
 
 ### Settings
 
@@ -96,7 +101,7 @@ backend/trivexa/
   engines/texture.py    ig2mv condition maps (headless OpenGL via moderngl/EGL) + the lean baker (xatlas, projection)
   engines/texture_upstream.py  MV-Adapter's texture pipeline (vendored) as the default baker
   download.py      resumable, checksum-verified weight downloads
-  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR, MeshFlow); see vendor/README.md
+  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR, MeshFlow, DINOv3); see vendor/README.md
 frontend/src/      React UI (Vite)
 ```
 
@@ -113,6 +118,6 @@ frontend/src/      React UI (Vite)
 - Prompts longer than 77 tokens are encoded in chunks rather than truncated. `(word:1.2)` weighting syntax is not parsed yet.
 - The SDXL VAE decodes in bf16 to avoid the fp16 NaN issue without the fp32 memory spike.
 - Only one large pipeline (image, multiview, 3D or remesh) is on the GPU at a time; switching tools reloads
-  (~8 s for MV-Adapter, ~3 s for TripoSR, ~5 s for MeshFlow, which peaks ~6.3 GB).
+  (~8 s for MV-Adapter, ~3 s for TripoSR, ~5 s for MeshFlow (+ DINOv3 on the first image-guided remesh), which peaks ~6.3 GB).
   Image-to-multiview peaks around 14.4 GB of VRAM (the text encoders are parked in system RAM while it denoises),
   so it is tight on a 16 GB card if anything else is using the GPU.

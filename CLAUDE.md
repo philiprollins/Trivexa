@@ -51,6 +51,7 @@ Downloaded by Trivexa into `data/models/` (via `trivexa.download`):
 | Texture | MV-Adapter SDXL `ig2mv` (image + geometry) and `tg2mv` (prompt + geometry) |
 | Upstream texture baker | `RealESRGAN_x2plus.pth`, `big-lama.pt` |
 | Remesh | MeshFlow `meshflow/config.yaml` + `model.pth` (gated `facebook/meshflow`, FAIR noncommercial, outputs too) |
+| Remesh image guidance | `meshflow/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth` (from Meta's DINOv3 form, fetched by hand) |
 
 Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_models/trellis_2_*`, `vae/trellis_2_*`,
 `microsoft/TRELLIS.2-4B`) and Pixal3D. SD 2.x / MV-Adapter SD2.1 variants are deliberately not supported.
@@ -87,8 +88,11 @@ anything else resident.
 - `multiview.py` — MV-Adapter modes `t2mv`/`i2mv` (Plücker camera conditioning) and `ig2mv`/`tg2mv`
   (caller-supplied position+normal maps, row+column attention). Uses MV-Adapter's shifted-SNR scheduler around any sampler.
 - `bg_removal.py` (BiRefNet, kept in RAM, moved to GPU only while running), `triposr.py` (image → vertex-coloured mesh).
-- `meshflow.py` — MeshFlow DiT + MeshVAE decoder (geometry-only: zero visual condition, no CFG; the DINOv3 image
-  encoder is gated and not wired up). ~4.2 GB resident, ~6.3 GB peak, ~5 s. Output is in the source's frame but is
+- `meshflow.py` — MeshFlow DiT + MeshVAE decoder, optionally guided by a reference image encoded with DINOv3
+  ViT-L/16 (built locally instead of via torch.hub; CFG 2.5 on the image condition, ~10 s; shape-only ~5 s, no CFG).
+  The image is cut out with BiRefNet and flattened on white (`prepare_reference(..., background=1.0)`). The checkpoint
+  has no vertex-count control (`use_proj_cond_on_temb` is off), so the face count can't be set. Colours are
+  area-averaged from the source. ~4.2 GB resident (+1.2 GB DINOv3), ~6.3 GB peak. Output is in the source's frame but is
   **non-manifold** in places (every 3-clique of the predicted edge graph becomes a triangle), which crashes UVAtlas:
   `texture_upstream` detaches faces on non-manifold edges before unwrapping.
 - `texture.py` — renders the ig2mv condition maps with headless OpenGL (moderngl/EGL) using MV-Adapter's own camera
@@ -108,7 +112,7 @@ references, model files, extra images). Multiview sets and 3D models each get a 
 delete removes the folder. The schema migrates in place (`ALTER TABLE` when a column is missing). 3D thumbnails start as
 the input image and are replaced by a render the browser uploads the first time the model is opened.
 
-**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR and MeshFlow inference code is
+**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR, MeshFlow and DINOv3 inference code is
 copied at pinned commits instead of pip-installed, to avoid their heavy unrelated dependencies and
 `trust_remote_code`. Local edits are marked `# Trivexa:`. `mvadapter/utils/mesh_utils/__init__.py` is intentionally
 empty so the camera helpers import without nvdiffrast/Triton/CV-CUDA. nvdiffrast is non-commercial licensed.
