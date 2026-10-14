@@ -25,11 +25,12 @@ from .engines import texture as texturing
 from .engines import meshflow as meshflow_engine
 from .engines import skintokens
 from .engines import texture_upstream
-from .engines import triposr
+from .engines import triposg, triposr
 from .engines.meshflow import MeshFlowEngine, MeshFlowParams
 from .engines.gltf_skin import skinned_glb
 from .engines.skintokens import RigParams, SkinTokensEngine
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
+from .engines.triposg import TripoSGEngine, TripoSGParams
 from .engines.triposr import TripoSREngine, TripoSRParams
 from .jobs import Job, JobManager
 from .store import Store
@@ -44,6 +45,7 @@ diffusion = DiffusionEngine()
 multiview = MultiviewEngine()
 bg_remover = BackgroundRemover()
 tripo = TripoSREngine()
+tripo_sg = TripoSGEngine()
 remesher = MeshFlowEngine()
 rigger = SkinTokensEngine()
 
@@ -66,7 +68,7 @@ if TEXTURE_BAKER_NOTE:
 
 def _exclusive(keep) -> None:
     """Only one large pipeline on the GPU at a time: unload every engine except `keep`."""
-    for engine in (diffusion, multiview, tripo, remesher, rigger):
+    for engine in (diffusion, multiview, tripo, tripo_sg, remesher, rigger):
         if engine is not keep:
             engine.unload()
 
@@ -104,6 +106,8 @@ def _loaded_label() -> str | None:
         return diffusion.model_path.stem
     if multiview.model_path:
         return f"{multiview.model_path.stem} · MV-Adapter {multiview.mode}"
+    if tripo_sg.transformer is not None:
+        return "TripoSG"
     if remesher.pipe is not None:
         return "MeshFlow"
     if rigger.model is not None:
@@ -132,6 +136,7 @@ def list_models():
         },
         "model3d": {
             "triposr": triposr.available(),
+            "triposg": triposg.available(),
             "meshflow": meshflow_engine.available(),
             "meshflow_image": meshflow_engine.image_available(),
             "skintokens": skintokens.available(),
@@ -332,31 +337,66 @@ class Model3DRequest(BaseModel):
     source_view: int = 0  # azimuth, when the source is a multiview set
     source_image: str | None = Field(None, max_length=40_000_000)
     remove_bg: bool = True
+    engine: Literal["triposr", "triposg"] = "triposr"
+    # TripoSR
     foreground_ratio: float = Field(0.85, ge=0.5, le=1.0)
     mc_resolution: int = Field(256, ge=64, le=512)
+    # TripoSG
+    steps: int = Field(50, ge=4, le=100)
+    guidance: float = Field(7.0, ge=1.0, le=15.0)
+    seed: int = Field(-1, ge=-1, le=2**32 - 1)
+    octree_depth: Literal[8, 9] = 9
+    face_limit: int = Field(0, ge=0, le=2_000_000)  # 0: keep every face ("faces" is the saved mesh's count)
+
+
+_MODEL3D_FIELDS = {
+    "triposr": ("foreground_ratio", "mc_resolution"),
+    "triposg": ("steps", "guidance", "octree_depth", "face_limit"),
+}
 
 
 @app.post("/api/generate/3d")
 async def generate_3d(req: Model3DRequest):
-    if not triposr.available():
+    if req.engine == "triposr" and not triposr.available():
         raise HTTPException(400, "TripoSR weights not found (models/triposr)")
+    if req.engine == "triposg" and not triposg.available():
+        raise HTTPException(400, "TripoSG weights not found; run: uv run python -m trivexa.download triposg")
     if req.remove_bg and not bg_remover.available():
         raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
     source, parent_id = _load_source_image(req.source_asset, req.source_image, req.source_view)
     # "front" records which way the mesh faces; older TripoSR models (before it was set) face -Z.
-    params = req.model_dump(exclude={"source_image"}) | {"engine": "triposr", "front": "+z"}
+    params = req.model_dump(include={"source_asset", "source_view", "remove_bg", *_MODEL3D_FIELDS[req.engine]})
+    params |= {"engine": req.engine, "front": "+z"}
+    if req.engine == "triposg":
+        params["seed"] = random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed
     job = Job(kind="model3d", params=params, run=_model3d_runner(params, source, parent_id))
     return {"jobs": [jobs.submit(job).public()]}
 
 
 def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
     def run(job: Job) -> dict:
-        _exclusive(tripo)
+        engine = tripo_sg if params["engine"] == "triposg" else tripo
+        _exclusive(engine)
         image = bg_remover.remove(source) if params["remove_bg"] else source
-        mesh, processed = tripo.generate(
-            TripoSRParams(image=image, foreground_ratio=params["foreground_ratio"], mc_resolution=params["mc_resolution"]),
-            on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
-        )
+        on_step = lambda step, total, preview: jobs.report_step(job, step, total, preview)  # noqa: E731
+        if engine is tripo_sg:
+            mesh, processed = tripo_sg.generate(
+                TripoSGParams(
+                    image=image,
+                    steps=params["steps"],
+                    guidance=params["guidance"],
+                    seed=params["seed"],
+                    octree_depth=params["octree_depth"],
+                    faces=params["face_limit"],
+                ),
+                on_step=on_step,
+                is_cancelled=job.cancel_requested.is_set,
+            )
+        else:
+            mesh, processed = tripo.generate(
+                TripoSRParams(image=image, foreground_ratio=params["foreground_ratio"], mc_resolution=params["mc_resolution"]),
+                on_step=on_step,
+            )
         return store.save_model3d(mesh, processed, params, parent_id)
 
     return run
