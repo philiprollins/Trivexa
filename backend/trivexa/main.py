@@ -23,9 +23,12 @@ from .engines.bg_removal import BackgroundRemover
 from .engines.diffusion import ARCHS, SAMPLERS, DiffusionEngine, GenParams
 from .engines import texture as texturing
 from .engines import meshflow as meshflow_engine
+from .engines import skintokens
 from .engines import texture_upstream
 from .engines import triposr
 from .engines.meshflow import MeshFlowEngine, MeshFlowParams
+from .engines.gltf_skin import skinned_glb
+from .engines.skintokens import RigParams, SkinTokensEngine
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
 from .engines.triposr import TripoSREngine, TripoSRParams
 from .jobs import Job, JobManager
@@ -42,6 +45,7 @@ multiview = MultiviewEngine()
 bg_remover = BackgroundRemover()
 tripo = TripoSREngine()
 remesher = MeshFlowEngine()
+rigger = SkinTokensEngine()
 
 
 def _texture_baker() -> tuple[str, str | None]:
@@ -62,7 +66,7 @@ if TEXTURE_BAKER_NOTE:
 
 def _exclusive(keep) -> None:
     """Only one large pipeline on the GPU at a time: unload every engine except `keep`."""
-    for engine in (diffusion, multiview, tripo, remesher):
+    for engine in (diffusion, multiview, tripo, remesher, rigger):
         if engine is not keep:
             engine.unload()
 
@@ -102,6 +106,8 @@ def _loaded_label() -> str | None:
         return f"{multiview.model_path.stem} · MV-Adapter {multiview.mode}"
     if remesher.pipe is not None:
         return "MeshFlow"
+    if rigger.model is not None:
+        return "SkinTokens"
     return None
 
 
@@ -128,6 +134,7 @@ def list_models():
             "triposr": triposr.available(),
             "meshflow": meshflow_engine.available(),
             "meshflow_image": meshflow_engine.image_available(),
+            "skintokens": skintokens.available(),
         },
         "texture": {"baker": TEXTURE_BAKER, "note": TEXTURE_BAKER_NOTE},
     }
@@ -439,6 +446,69 @@ def _remesh_runner(
             is_cancelled=job.cancel_requested.is_set,
         )
         return store.save_model3d(out, shown_image, params, parent_id)
+
+    return run
+
+
+class RigRequest(BaseModel):
+    source_asset: str  # a 3D model asset
+    style: Literal["auto", "humanoid"] = "auto"  # see skintokens.STYLES
+    seed: int = Field(-1, ge=-1, le=2**32 - 1)
+    count: int = Field(1, ge=1, le=8)
+    beams: int = Field(skintokens.DEFAULT_BEAMS, ge=1, le=20)
+    temperature: float = Field(1.0, ge=0.1, le=2.0)
+
+
+@app.post("/api/generate/rig")
+async def generate_rig(req: RigRequest):
+    source = store.get(req.source_asset)
+    if not source or source["kind"] != "model3d":
+        raise HTTPException(400, "Choose a 3D model to rig")
+    if not skintokens.available():
+        raise HTTPException(400, "SkinTokens weights not found (data/models/skintokens)")
+    mesh_path = OUTPUTS_DIR / source["model_urls"]["glb"].removeprefix("/files/")
+    input_image = Image.open(OUTPUTS_DIR / source["input_url"].removeprefix("/files/")).copy()
+    sp = source["params"]
+    # Older TripoSR models face -Z: turn them to +Z like everything newer (as remeshing does).
+    half_turn = sp.get("front") != "+z" and sp.get("engine") == "triposr"
+    base_seed = random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed
+    created = []
+    for i in range(req.count):
+        params = req.model_dump(exclude={"count"}) | {
+            "seed": (base_seed + i) % 2**32,
+            "engine": sp.get("engine", "mesh") + " + skintokens",
+            "front": "+z",
+            "rigged": True,
+            # what the rig was built on, so the panels can still describe the model
+            **{k: sp[k] for k in ("textured", "remeshed") if sp.get(k)},
+        }
+        job = Job(kind="rig", params=params, run=_rig_runner(mesh_path, input_image, half_turn, params, source["id"]))
+        created.append(jobs.submit(job).public())
+    return {"jobs": created}
+
+
+def _rig_runner(mesh_path, input_image: Image.Image, half_turn: bool, params: dict, parent_id: str):
+    def run(job: Job) -> dict:
+        import numpy as np
+        import trimesh
+
+        _exclusive(rigger)
+        mesh = trimesh.load(mesh_path, force="mesh")
+        if half_turn:
+            mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [0, 1, 0]))
+        rig = rigger.generate(
+            RigParams(
+                mesh=mesh,
+                style=params["style"],
+                seed=params["seed"],
+                beams=params["beams"],
+                temperature=params["temperature"],
+            ),
+            on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
+            is_cancelled=job.cancel_requested.is_set,
+        )
+        glb = skinned_glb(mesh, rig.joints, rig.parents, rig.names, rig.weights)
+        return store.save_model3d(mesh, input_image, params | {"bones": len(rig.joints)}, parent_id, glb=glb)
 
     return run
 
