@@ -18,7 +18,7 @@ files* from `~/ComfyUI/models` (`TRIVEXA_MODELS_DIR`). Reading ComfyUI source fo
 cd backend && .venv/bin/uvicorn trivexa.main:app --reload --port 8000   # backend dev
 cd frontend && npm run dev                  # UI dev on :5173, proxies /api (incl. websocket) and /files to :8000
 cd frontend && npm run build                # type-check (tsc -b) + build; the server serves frontend/dist
-cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config skintokens]  # resumable, SHA-256 checked
+cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config skintokens triposg]  # resumable, SHA-256 checked
 cd backend && uv sync --extra texture       # compiles nvdiffrast; needs CUDA_HOME=/usr/local/cuda on PATH
 ```
 
@@ -53,6 +53,7 @@ Downloaded by Trivexa into `data/models/` (via `trivexa.download`):
 | Remesh | MeshFlow `meshflow/config.yaml` + `model.pth` (gated `facebook/meshflow`, FAIR noncommercial, outputs too) |
 | Remesh image guidance | `meshflow/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth` (from Meta's DINOv3 form, fetched by hand) |
 | Rig | SkinTokens `skintokens/experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt` (VAST-AI, MIT; includes the skin VAE) |
+| Image → 3D | TripoSG `triposg/{transformer,vae,image_encoder_dinov2}/` (VAST-AI/TripoSG, MIT weights; ~7.9 GB, fp32 on disk) |
 
 Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_models/trellis_2_*`, `vae/trellis_2_*`,
 `microsoft/TRELLIS.2-4B`) and Pixal3D. SD 2.x / MV-Adapter SD2.1 variants are deliberately not supported.
@@ -60,7 +61,7 @@ Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_mo
 ## Built so far
 
 Image tool (SDXL + SD 1.5, long-prompt chunking, live x0 previews, cancel) → Multiview tool (MV-Adapter t2mv/i2mv,
-6 views at 768 px) → 3D Model tool (TripoSR, orbit viewer with colour/clay/wire, GLB/OBJ) → Remesh tool (MeshFlow,
+6 views at 768 px) → 3D Model tool (TripoSG by default, or TripoSR; orbit viewer with colour/clay/wire, GLB/OBJ) → Remesh tool (MeshFlow,
 dense mesh → ~1k-face artist-style mesh, colours transferred as vertex colours) → Texture tool (ig2mv or tg2mv
 views baked into a UV texture by MV-Adapter's own pipeline, with Trivexa's lean baker as a fallback) → Rig tool (SkinTokens,
 skeleton + skin weights in a skinned GLB; the viewer shows bones and runs a pose test). Gallery, favorites,
@@ -90,6 +91,14 @@ anything else resident.
 - `multiview.py` — MV-Adapter modes `t2mv`/`i2mv` (Plücker camera conditioning) and `ig2mv`/`tg2mv`
   (caller-supplied position+normal maps, row+column attention). Uses MV-Adapter's shifted-SNR scheduler around any sampler.
 - `bg_removal.py` (BiRefNet, kept in RAM, moved to GPU only while running), `triposr.py` (image → vertex-coloured mesh).
+- `triposg.py` — TripoSG: 1.5B rectified-flow DiT (fp16, CFG 7 with all-zero image features as the negative, 50
+  steps ≈ 13 s) on DINOv2-L features of the cut-out image, flattened on white and padded square (upstream's
+  `image_process`, with BiRefNet instead of RMBG-1.4). The VAE's SDF is meshed with upstream's hierarchical extractor
+  (narrow-band refinement, PyMCubes); its dense pass starts at 128³ instead of 256³, which gives the identical mesh
+  in half the time (512³: ~11 s, ~850k faces, watertight). Untextured; output is already Y-up facing +Z (no
+  rotation). "Face limit" decimates with pymeshlab `preservetopology=True` and without upstream's
+  `merge_close_vertices`, both of which otherwise break watertightness (~9 s for 850k → 200k). ~3.7 GB resident,
+  ~5.3 GB peak. `params.face_limit` is the request; `params.faces` stays the saved mesh's count.
 - `meshflow.py` — MeshFlow DiT + MeshVAE decoder, optionally guided by a reference image encoded with DINOv3
   ViT-L/16 (built locally instead of via torch.hub; CFG 2.5 on the image condition, ~10 s; shape-only ~5 s, no CFG).
   The image is cut out with BiRefNet and flattened on white (`prepare_reference(..., background=1.0)`). The checkpoint
@@ -124,9 +133,10 @@ references, model files, extra images). Multiview sets and 3D models each get a 
 delete removes the folder. The schema migrates in place (`ALTER TABLE` when a column is missing). 3D thumbnails start as
 the input image and are replaced by a render the browser uploads the first time the model is opened.
 
-**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR, MeshFlow, DINOv3 and SkinTokens inference code is
+**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR, TripoSG, MeshFlow, DINOv3 and SkinTokens inference code is
 copied at pinned commits instead of pip-installed, to avoid their heavy unrelated dependencies and
-`trust_remote_code`. Local edits are marked `# Trivexa:`. `mvadapter/utils/mesh_utils/__init__.py` is intentionally
+`trust_remote_code`. Local edits are marked `# Trivexa:`. TripoSG's DiT is HunyuanDiT-derived (Tencent Hunyuan
+Community License: not licensed in the EU); its FlashVDM-licensed fast decoder is removed. `mvadapter/utils/mesh_utils/__init__.py` is intentionally
 empty so the camera helpers import without nvdiffrast/Triton/CV-CUDA. nvdiffrast is non-commercial licensed.
 
 **Library-version quirks already handled.** transformers 5 flattened `CLIPTextModel` (no `.text_model`; diffusers'
