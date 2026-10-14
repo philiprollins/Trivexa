@@ -18,7 +18,7 @@ files* from `~/ComfyUI/models` (`TRIVEXA_MODELS_DIR`). Reading ComfyUI source fo
 cd backend && .venv/bin/uvicorn trivexa.main:app --reload --port 8000   # backend dev
 cd frontend && npm run dev                  # UI dev on :5173, proxies /api (incl. websocket) and /files to :8000
 cd frontend && npm run build                # type-check (tsc -b) + build; the server serves frontend/dist
-cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config]  # resumable, SHA-256 checked
+cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config skintokens]  # resumable, SHA-256 checked
 cd backend && uv sync --extra texture       # compiles nvdiffrast; needs CUDA_HOME=/usr/local/cuda on PATH
 ```
 
@@ -52,6 +52,7 @@ Downloaded by Trivexa into `data/models/` (via `trivexa.download`):
 | Upstream texture baker | `RealESRGAN_x2plus.pth`, `big-lama.pt` |
 | Remesh | MeshFlow `meshflow/config.yaml` + `model.pth` (gated `facebook/meshflow`, FAIR noncommercial, outputs too) |
 | Remesh image guidance | `meshflow/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth` (from Meta's DINOv3 form, fetched by hand) |
+| Rig | SkinTokens `skintokens/experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt` (VAST-AI, MIT; includes the skin VAE) |
 
 Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_models/trellis_2_*`, `vae/trellis_2_*`,
 `microsoft/TRELLIS.2-4B`) and Pixal3D. SD 2.x / MV-Adapter SD2.1 variants are deliberately not supported.
@@ -61,13 +62,14 @@ Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_mo
 Image tool (SDXL + SD 1.5, long-prompt chunking, live x0 previews, cancel) → Multiview tool (MV-Adapter t2mv/i2mv,
 6 views at 768 px) → 3D Model tool (TripoSR, orbit viewer with colour/clay/wire, GLB/OBJ) → Remesh tool (MeshFlow,
 dense mesh → ~1k-face artist-style mesh, colours transferred as vertex colours) → Texture tool (ig2mv or tg2mv
-views baked into a UV texture by MV-Adapter's own pipeline, with Trivexa's lean baker as a fallback). Gallery, favorites,
-"Reuse" settings, and per-asset actions chain the tools (image → Multiview / 3D, multiview set → 3D, model → Remesh / Texture).
+views baked into a UV texture by MV-Adapter's own pipeline, with Trivexa's lean baker as a fallback) → Rig tool (SkinTokens,
+skeleton + skin weights in a skinned GLB; the viewer shows bones and runs a pose test). Gallery, favorites,
+"Reuse" settings, and per-asset actions chain the tools (image → Multiview / 3D, multiview set → 3D, model → Remesh / Texture / Rig).
 A side-by-side baker benchmark is in `data/benchmarks/texture-2026-10-12/`.
 
 ## Architecture
 
-**Request flow.** Each `POST /api/generate/{image,multiview,3d,remesh,texture}` in `main.py` validates input, resolves model
+**Request flow.** Each `POST /api/generate/{image,multiview,3d,remesh,texture,rig}` in `main.py` validates input, resolves model
 files (`models.resolve_checkpoint` only accepts ids from the on-disk listing), builds a `params` dict and submits one
 `Job` per output with a `run` closure. `JobManager` (`jobs.py`) runs jobs one at a time on a worker thread under a GPU
 lock and pushes `jobs` / `job` / `progress` (with preview data URLs) events over `/api/ws`. The closure calls an engine,
@@ -98,6 +100,13 @@ anything else resident.
   area-averaged from the source. ~4.2 GB resident (+1.2 GB DINOv3), ~6.3 GB peak. Output is in the source's frame but is
   **non-manifold** in places (every 3-clique of the predicted edge graph becomes a triangle), which crashes UVAtlas:
   `texture_upstream` detaches faces on non-manifold edges before unwrapping.
+- `skintokens.py` — SkinTokens: TokenRig (Qwen3-0.6B-shaped, SDPA) writes the skeleton as tokens, then 4 skin tokens
+  per bone that its FSQ-CVAE decodes into weights at 54k surface samples, interpolated to the vertices (8-NN inverse
+  distance), top 4 kept. The model was trained on Blender-imported meshes, so input is turned Y-up → Z-up and joints
+  back. Style "auto"/"humanoid" is the `articulation`/`vroid` class token; the checkpoint emits no part tokens, so
+  bones are always `bone_<i>`. Progress/cancel come from a `StoppingCriteria`. ~4 GB peak, ~4–6 s per rig once loaded.
+  `gltf_skin.py` appends joints (translation-only nodes), inverse bind matrices and JOINTS_0/WEIGHTS_0 to trimesh's
+  GLB export; `store.save_model3d(..., glb=...)` writes it (the OBJ stays unrigged). Rigs have `params.rigged`, `bones`.
 - `texture.py` — renders the ig2mv condition maps with headless OpenGL (moderngl/EGL) using MV-Adapter's own camera
   matrices, plus the **lean** baker (xatlas + projection, unseen texels keep vertex colours).
 - `texture_upstream.py` — wraps the vendored MV-Adapter `TexturePipeline` (UVAtlas, RealESRGAN ×2, LaMa view
@@ -115,7 +124,7 @@ references, model files, extra images). Multiview sets and 3D models each get a 
 delete removes the folder. The schema migrates in place (`ALTER TABLE` when a column is missing). 3D thumbnails start as
 the input image and are replaced by a render the browser uploads the first time the model is opened.
 
-**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR, MeshFlow and DINOv3 inference code is
+**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR, MeshFlow, DINOv3 and SkinTokens inference code is
 copied at pinned commits instead of pip-installed, to avoid their heavy unrelated dependencies and
 `trust_remote_code`. Local edits are marked `# Trivexa:`. `mvadapter/utils/mesh_utils/__init__.py` is intentionally
 empty so the camera helpers import without nvdiffrast/Triton/CV-CUDA. nvdiffrast is non-commercial licensed.
@@ -126,7 +135,7 @@ Current pymeshlab renamed `Percentage` → `PercentageValue`.
 
 **Frontend** (`frontend/src`). `App.tsx` owns state: the active tool (rail), per-tool forms persisted in
 localStorage, assets, selection, and the job map from `useJobs` (websocket with auto-reconnect). Panels per tool
-(`ImagePanel`, `MultiviewPanel`, `Model3DPanel`, `TexturePanel`) share `controls.tsx`. `Viewer` renders images,
+(`ImagePanel`, `MultiviewPanel`, `Model3DPanel`, `RemeshPanel`, `TexturePanel`, `RigPanel`) share `controls.tsx`. `Viewer` renders images,
 3×2 multiview grids, pending jobs, and 3D models via `ModelViewer` (three.js, lazy-loaded). Plain CSS with tokens
 in `styles.css`; no CDN assets (the app must work offline).
 

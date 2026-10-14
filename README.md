@@ -27,6 +27,14 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
   (incl. top/bottom) conditioned on the mesh's position and normal maps, which are baked into a 1K–4K texture (~75 s). Output: textured GLB, OBJ zip (OBJ + MTL + PNG)
   and the texture PNG. Two bakers, chosen in `settings.toml`: MV-Adapter's own pipeline (default) or Trivexa's
   lean fallback — see below.
+- **Rig**: adds a skeleton and skin weights to a 3D model with [SkinTokens](https://github.com/VAST-AI-Research/SkinTokens)
+  (UniRig's successor), predicted together in one pass: ~10 s per variation, ~4 GB VRAM. The rigged GLB keeps the
+  model's texture or vertex colours and imports into Blender as an armature with weighted vertex groups. **Auto**
+  suits any shape (characters, creatures, props); **Humanoid** asks for a skeleton like the VRoid characters the
+  model learned from (spine, limbs and finger chains; about twice the bones on a character). Bones are named
+  `bone_0`…; the checkpoint has no way to give them VRoid/Mixamo names. The viewer can draw the bones and run a pose
+  test that sways every bone, to check the weights. Clean, low-poly meshes (Remesh) in a T- or A-pose rig best.
+  SkinTokens is MIT-licensed.
 
 ## Run
 
@@ -52,6 +60,8 @@ license on huggingface.co/facebook/meshflow and `hf auth login` first. Image-gui
 `dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth` (1.2 GB, ViT-L/16 LVD-1689M) in `data/models/meshflow/`; Meta hands
 out personal download links (https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/), so fetch it
 by hand. Without it Remesh is shape-only.
+`skintokens` (1.1 GB) is Rig's checkpoint. It already contains the skin-token VAE, so upstream's separate
+`skin_vae_2_10_32768/last.ckpt` and the Qwen3-0.6B config it fetches are not needed.
 
 ### Settings
 
@@ -81,7 +91,7 @@ cd frontend && npm run dev     # → http://localhost:5173 (proxies /api and /fi
 | Generated images | `data/outputs/images/YYYY-MM-DD/*.png` (settings embedded as PNG text chunks) |
 | Multi-view sets | `data/outputs/multiview/YYYY-MM-DD/<id>/` (`view_000.png` … `view_315.png`, `grid.png`, `reference.png`) |
 | 3D models | `data/outputs/models3d/YYYY-MM-DD/<id>/` (`model.glb`, `model.obj`, `input.png`; textured models also `material.mtl`, `texture.png`, `views.png`) |
-| Downloaded weights | `data/models/` (MV-Adapter, texture baker, MeshFlow) |
+| Downloaded weights | `data/models/` (MV-Adapter, texture baker, MeshFlow, SkinTokens) |
 | Thumbnails | `data/outputs/thumbs/` |
 | Asset database | `data/trivexa.db` (SQLite) |
 | Model configs/tokenizers | `data/hf-configs/` (fetched once per architecture on first load, a few MB, no weights) |
@@ -101,10 +111,12 @@ backend/trivexa/
   engines/bg_removal.py BiRefNet foreground extraction
   engines/triposr.py    TripoSR image-to-mesh
   engines/meshflow.py   MeshFlow remeshing (dense mesh -> artist-style low-poly mesh)
+  engines/skintokens.py SkinTokens rigging (mesh -> skeleton + skin weights)
+  engines/gltf_skin.py  writes the skinned GLB (joints, inverse bind matrices, JOINTS_0/WEIGHTS_0)
   engines/texture.py    ig2mv condition maps (headless OpenGL via moderngl/EGL) + the lean baker (xatlas, projection)
   engines/texture_upstream.py  MV-Adapter's texture pipeline (vendored) as the default baker
   download.py      resumable, checksum-verified weight downloads
-  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR, MeshFlow, DINOv3); see vendor/README.md
+  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR, MeshFlow, DINOv3, SkinTokens); see vendor/README.md
 frontend/src/      React UI (Vite)
 ```
 
@@ -120,7 +132,8 @@ frontend/src/      React UI (Vite)
   and default to a half turn.
 - Prompts longer than 77 tokens are encoded in chunks rather than truncated. `(word:1.2)` weighting syntax is not parsed yet.
 - The SDXL VAE decodes in bf16 to avoid the fp16 NaN issue without the fp32 memory spike.
-- Only one large pipeline (image, multiview, 3D or remesh) is on the GPU at a time; switching tools reloads
-  (~8 s for MV-Adapter, ~3 s for TripoSR, ~5 s for MeshFlow (+ DINOv3 on the first image-guided remesh), which peaks ~6.3 GB).
+- Only one large pipeline (image, multiview, 3D, remesh or rig) is on the GPU at a time; switching tools reloads
+  (~8 s for MV-Adapter, ~3 s for TripoSR, ~5 s for MeshFlow (+ DINOv3 on the first image-guided remesh), which peaks
+  ~6.3 GB; ~6 s for SkinTokens, which peaks ~4 GB).
   Image-to-multiview peaks around 14.4 GB of VRAM (the text encoders are parked in system RAM while it denoises),
   so it is tight on a 16 GB card if anything else is using the GPU.
