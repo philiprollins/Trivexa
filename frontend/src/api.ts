@@ -117,6 +117,7 @@ export interface MultiviewSupport {
   t2mv: boolean;
   i2mv: boolean;
   ig2mv: boolean;
+  tg2mv: boolean;
   bg_removal: boolean;
 }
 
@@ -171,6 +172,7 @@ export const api = {
   generateTexture: (params: {
     source_asset: string;
     model: string;
+    mode: "ig2mv" | "tg2mv";
     reference_asset?: string | null;
     reference_image?: string | null;
     remove_bg: boolean;

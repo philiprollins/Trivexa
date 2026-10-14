@@ -1,9 +1,10 @@
 import { ChevronDown, ImagePlus, PaintBucket, X, Zap } from "lucide-react";
 import { useRef, useState } from "react";
-import type { Asset, Checkpoint, Sampler, TextureBaker } from "../api";
+import type { Asset, Checkpoint, MultiviewSupport, Sampler, TextureBaker } from "../api";
 import { SeedInput, Section, Segmented, Slider } from "./controls";
 
 export interface TextureForm {
+  mode: "ig2mv" | "tg2mv"; // guided by a reference image, or by the prompt alone
   prompt: string;
   model: string;
   removeBg: boolean;
@@ -17,6 +18,9 @@ export interface TextureForm {
 }
 
 export type TextureReference = { type: "asset"; asset: Asset } | { type: "upload"; dataUrl: string; name: string };
+
+// MV-Adapter's texture_i2tex / texture_t2tex scripts use CFG 3 and 7.
+export const TEXTURE_MODE_CFG = { ig2mv: 3, tg2mv: 7 } as const;
 
 /** Older TripoSR models (before facing was recorded) face -Z, i.e. need a half turn. */
 export const defaultFrontYaw = (model: Asset) => (model.params.front === "+z" ? 0 : model.params.engine === "triposr" ? 180 : 0);
@@ -33,8 +37,7 @@ interface Props {
   selected: Asset | null;
   checkpoints: Checkpoint[];
   samplers: Sampler[];
-  available: boolean;
-  bgAvailable: boolean;
+  support: MultiviewSupport | null;
   baker: TextureBaker | null;
   onGenerate: () => void;
   submitting: boolean;
@@ -48,8 +51,15 @@ export function TexturePanel(p: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const sdxl = p.checkpoints.filter((c) => c.arch === "sdxl");
+  const fromImage = form.mode === "ig2mv";
+  const available = p.support?.[form.mode] ?? false;
+  const bgAvailable = p.support?.bg_removal ?? false;
   const canGenerate =
-    p.available && model !== null && sdxl.some((c) => c.id === form.model) && !(form.removeBg && !p.bgAvailable) && !p.submitting;
+    available &&
+    model !== null &&
+    sdxl.some((c) => c.id === form.model) &&
+    (fromImage ? !(form.removeBg && !bgAvailable) : form.prompt.trim() !== "") &&
+    !p.submitting;
 
   const readFile = (file: File | undefined) => {
     if (!file) return;
@@ -95,30 +105,43 @@ export function TexturePanel(p: Props) {
           )}
         </Section>
 
-        <Section label="Reference image">
-          <div className="ref-row">
-            <div className="ref-thumb">{refSrc ? <img src={refSrc} alt="Reference" /> : <ImagePlus size={18} />}</div>
-            <div className="ref-actions">
-              <span className="hint">{p.reference ? "Custom reference" : "The model's own input image"}</span>
-              <div className="ref-buttons">
-                <button className="link-btn" onClick={() => fileInput.current?.click()}>
-                  Upload…
-                </button>
-                {p.selected?.kind === "image" && (
-                  <button className="link-btn" onClick={() => p.setReference({ type: "asset", asset: p.selected! })}>
-                    Use selected image
-                  </button>
-                )}
-                {p.reference && (
-                  <button className="link-btn" onClick={() => p.setReference(null)}>
-                    Reset
-                  </button>
-                )}
-              </div>
-            </div>
-            <input ref={fileInput} type="file" accept="image/*" hidden onChange={(e) => readFile(e.target.files?.[0])} />
-          </div>
+        <Section label="Texture from">
+          <Segmented
+            options={[
+              { value: "ig2mv", label: "Image" },
+              { value: "tg2mv", label: "Prompt" },
+            ]}
+            value={form.mode}
+            onChange={(mode) => setForm({ mode, cfg: TEXTURE_MODE_CFG[mode] })}
+          />
         </Section>
+
+        {fromImage && (
+          <Section label="Reference image">
+            <div className="ref-row">
+              <div className="ref-thumb">{refSrc ? <img src={refSrc} alt="Reference" /> : <ImagePlus size={18} />}</div>
+              <div className="ref-actions">
+                <span className="hint">{p.reference ? "Custom reference" : "The model's own input image"}</span>
+                <div className="ref-buttons">
+                  <button className="link-btn" onClick={() => fileInput.current?.click()}>
+                    Upload…
+                  </button>
+                  {p.selected?.kind === "image" && (
+                    <button className="link-btn" onClick={() => p.setReference({ type: "asset", asset: p.selected! })}>
+                      Use selected image
+                    </button>
+                  )}
+                  {p.reference && (
+                    <button className="link-btn" onClick={() => p.setReference(null)}>
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </div>
+              <input ref={fileInput} type="file" accept="image/*" hidden onChange={(e) => readFile(e.target.files?.[0])} />
+            </div>
+          </Section>
+        )}
 
         <Section label="Front of the model faces">
           <Segmented
@@ -131,13 +154,15 @@ export function TexturePanel(p: Props) {
             value={p.frontYaw}
             onChange={p.setFrontYaw}
           />
-          <p className="hint">Turns the model before texturing so the reference lines up with its front.</p>
+          <p className="hint">
+            Turns the model before texturing so {fromImage ? "the reference lines up" : "the front view lines up"} with its front.
+          </p>
         </Section>
 
         <div className="prompt-card">
           <textarea
             className="prompt"
-            placeholder="Optional: describe the materials"
+            placeholder={fromImage ? "Optional: describe the materials" : "Describe the texture, e.g. weathered bronze statue"}
             value={form.prompt}
             onChange={(e) => setForm({ prompt: e.target.value })}
             rows={2}
@@ -178,16 +203,18 @@ export function TexturePanel(p: Props) {
           />
         </Section>
 
-        <Section label="Reference background">
-          <Segmented
-            options={[
-              { value: "remove", label: "Remove", disabled: !p.bgAvailable },
-              { value: "keep", label: "Keep" },
-            ]}
-            value={form.removeBg ? "remove" : "keep"}
-            onChange={(v) => setForm({ removeBg: v === "remove" })}
-          />
-        </Section>
+        {fromImage && (
+          <Section label="Reference background">
+            <Segmented
+              options={[
+                { value: "remove", label: "Remove", disabled: !bgAvailable },
+                { value: "keep", label: "Keep" },
+              ]}
+              value={form.removeBg ? "remove" : "keep"}
+              onChange={(v) => setForm({ removeBg: v === "remove" })}
+            />
+          </Section>
+        )}
 
         <button className="collapse-head" onClick={() => setShowAdvanced((v) => !v)}>
           Sampling settings
@@ -197,14 +224,16 @@ export function TexturePanel(p: Props) {
           <div className="advanced">
             <Slider label="Steps" min={10} max={80} step={1} value={form.steps} onChange={(steps) => setForm({ steps })} />
             <Slider label="CFG scale" min={1} max={12} step={0.5} value={form.cfg} onChange={(cfg) => setForm({ cfg })} />
-            <Slider
-              label="Reference strength"
-              min={0}
-              max={2}
-              step={0.05}
-              value={form.referenceScale}
-              onChange={(referenceScale) => setForm({ referenceScale })}
-            />
+            {fromImage && (
+              <Slider
+                label="Reference strength"
+                min={0}
+                max={2}
+                step={0.05}
+                value={form.referenceScale}
+                onChange={(referenceScale) => setForm({ referenceScale })}
+              />
+            )}
             <Section label="Sampler">
               <select className="select" value={form.sampler} onChange={(e) => setForm({ sampler: e.target.value })}>
                 {p.samplers.map((s) => (
@@ -218,10 +247,10 @@ export function TexturePanel(p: Props) {
           </div>
         )}
 
-        {!p.available && (
+        {p.support && !available && (
           <p className="notice">
-            MV-Adapter ig2mv weights aren't downloaded yet. Expected at{" "}
-            <code>data/models/mv-adapter/mvadapter_ig2mv_sdxl.safetensors</code>.
+            MV-Adapter {form.mode} weights aren't downloaded yet. Expected at{" "}
+            <code>data/models/mv-adapter/mvadapter_{form.mode}_sdxl.safetensors</code>.
           </p>
         )}
       </div>

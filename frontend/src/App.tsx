@@ -56,6 +56,7 @@ const DEFAULT_3D_FORM: Model3DForm = { removeBg: true, foregroundRatio: 0.85, re
 
 // Defaults from MV-Adapter's texture_i2tex script (CFG 3, 768 px views); 40 steps instead of 50 for speed.
 const DEFAULT_TEXTURE_FORM: TextureForm = {
+  mode: "ig2mv",
   prompt: "",
   model: "",
   removeBg: true,
@@ -280,10 +281,11 @@ export default function App() {
       const { jobs: created } = await api.generateTexture({
         source_asset: texModel.id,
         model: texForm.model,
+        mode: texForm.mode,
         reference_asset: texReference?.type === "asset" ? texReference.asset.id : null,
         reference_image: texReference?.type === "upload" ? texReference.dataUrl : null,
         remove_bg: texForm.removeBg,
-        prompt: texForm.prompt || "high quality",
+        prompt: texForm.mode === "tg2mv" ? texForm.prompt : texForm.prompt || "high quality",
         steps: texForm.steps,
         cfg: texForm.cfg,
         sampler: texForm.sampler,
@@ -437,8 +439,7 @@ export default function App() {
             selected={selectedAsset}
             checkpoints={checkpoints}
             samplers={samplers}
-            available={mvSupport?.ig2mv ?? false}
-            bgAvailable={mvSupport?.bg_removal ?? false}
+            support={mvSupport}
             baker={textureBaker}
             onGenerate={generateTexture}
             submitting={submitting}
