@@ -147,10 +147,16 @@ function Details({ asset }: { asset: Asset | null }) {
   );
 }
 
+const ENGINE_NAMES: Record<string, string> = { triposr: "TripoSR", meshflow: "MeshFlow remesh", "mv-adapter": "MV-Adapter texture" };
+
+/** "triposr + meshflow + mv-adapter" -> "TripoSR + MeshFlow remesh + MV-Adapter texture" */
+const engineLabel = (engine: string | undefined) =>
+  (engine ?? "triposr").split(" + ").map((e) => ENGINE_NAMES[e] ?? e).join(" + ");
+
 function Model3DDetails({ asset }: { asset: Asset }) {
   const pr = asset.params;
   const rows: [string, string | number][] = [
-    ["Engine", pr.textured ? "TripoSR + MV-Adapter texture" : "TripoSR"],
+    ["Engine", engineLabel(pr.engine)],
     ...(pr.textured
       ? ([
           ["Texture", `${pr.uv_size} × ${pr.uv_size}`],
@@ -164,11 +170,18 @@ function Model3DDetails({ asset }: { asset: Asset }) {
     ["Vertices", pr.vertices?.toLocaleString() ?? "—"],
     ...(pr.textured
       ? []
-      : ([
-          ["Mesh resolution", pr.mc_resolution ?? "—"],
-          ["Subject fill", pr.foreground_ratio ?? "—"],
-        ] as [string, string | number][])),
-    ["Background", pr.remove_bg ? "Removed" : "Kept"],
+      : pr.remeshed
+        ? ([
+            ["Source faces", pr.source_faces?.toLocaleString() ?? "—"],
+            ["Steps", pr.steps ?? "—"],
+            ["Seed", pr.seed ?? "—"],
+            ["Small holes", pr.fill_holes ? "Filled" : "Left open"],
+          ] as [string, string | number][])
+        : ([
+            ["Mesh resolution", pr.mc_resolution ?? "—"],
+            ["Subject fill", pr.foreground_ratio ?? "—"],
+          ] as [string, string | number][])),
+    ...(pr.remove_bg === undefined ? [] : ([["Background", pr.remove_bg ? "Removed" : "Kept"]] as [string, string][])),
     ["Created", new Date(asset.created_at * 1000).toLocaleString()],
   ];
   return (

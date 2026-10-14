@@ -1,4 +1,4 @@
-import { Box, Copy, Download, ExternalLink, Layers, PaintBucket, RotateCcw, Rotate3d, Star, Trash2, X } from "lucide-react";
+import { Box, Copy, Download, ExternalLink, Layers, PaintBucket, Pyramid, RotateCcw, Rotate3d, Star, Trash2, X } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 import type { Asset, Job } from "../api";
 import { Segmented } from "./controls";
@@ -19,6 +19,7 @@ interface Props {
   onMakeMultiview: (a: Asset) => void;
   onMake3D: (a: Asset) => void;
   onTexture: (a: Asset) => void;
+  onRemesh: (a: Asset) => void;
   onModelSnapshot: (a: Asset, dataUrl: string) => void;
   notify: (msg: string) => void;
 }
@@ -26,13 +27,13 @@ interface Props {
 const VIEW_NAMES: Record<number, string> = { 0: "Front", 90: "Right", 180: "Back", 270: "Left" };
 
 export function Viewer(props: Props) {
-  const { asset, job, queuePosition, onCancel, onToggleFavorite, onDelete, onReuse, onMakeMultiview, onMake3D, onTexture, notify } = props;
+  const { asset, job, queuePosition, onCancel, onToggleFavorite, onDelete, onReuse, onMakeMultiview, onMake3D, onTexture, onRemesh, notify } = props;
   const [renderMode, setRenderMode] = useState<RenderMode>("color");
   const [autoRotate, setAutoRotate] = useState(true);
 
   if (job && job.status !== "done") {
     const [width, height] =
-      job.kind === "multiview" || job.kind === "texture" ? [3, 2] : job.kind === "model3d" ? [1, 1] : [job.params.width, job.params.height];
+      job.kind === "multiview" || job.kind === "texture" ? [3, 2] : job.kind === "model3d" || job.kind === "remesh" ? [1, 1] : [job.params.width, job.params.height];
     const pct = job.total ? Math.round((job.step / job.total) * 100) : 0;
     return (
       <main className="viewer">
@@ -42,7 +43,7 @@ export function Viewer(props: Props) {
             <div className="pending-overlay">
               {job.status === "queued" && <span>Queued{queuePosition > 0 ? ` · #${queuePosition}` : ""}</span>}
               {job.status === "loading" && (
-                <span>{{ image: "Loading model…", texture: "Unwrapping UVs & preparing…" }[job.kind as string] ?? "Preparing…"}</span>
+                <span>{{ image: "Loading model…", texture: "Unwrapping UVs & preparing…", remesh: "Loading MeshFlow…" }[job.kind as string] ?? "Preparing…"}</span>
               )}
               {job.status === "running" && (
                 <span>{job.kind === "model3d" ? ["Encoding image…", "Extracting mesh…", "Saving…"][job.step - 1] : `Step ${job.step} / ${job.total}`}</span>
@@ -61,6 +62,8 @@ export function Viewer(props: Props) {
           <p className="toolbar-prompt" title={job.params.prompt}>
             {job.kind === "texture"
               ? "Texturing 3D model"
+              : job.kind === "remesh"
+              ? "Remeshing 3D model"
               : job.params.prompt || (job.kind === "multiview" ? "Multiview from image" : job.kind === "model3d" ? "3D model from image" : "")}
           </p>
           {(job.status === "queued" || job.status === "loading" || job.status === "running") && (
@@ -153,7 +156,7 @@ export function Viewer(props: Props) {
         )}
         <p className="toolbar-prompt" title={asset.prompt}>
           {asset.kind === "model3d"
-            ? `${asset.params.textured ? "Textured model" : "3D model"} · ${asset.params.faces?.toLocaleString() ?? "?"} faces`
+            ? `${asset.params.textured ? "Textured model" : asset.params.remeshed ? "Remeshed model" : "3D model"} · ${asset.params.faces?.toLocaleString() ?? "?"} faces`
             : asset.prompt || (asset.kind === "multiview" ? "Multiview from image" : "")}
         </p>
         <div className="toolbar-actions">
@@ -173,6 +176,11 @@ export function Viewer(props: Props) {
           {(asset.kind === "image" || asset.kind === "multiview") && (
             <button className="tool-btn" onClick={() => onMake3D(asset)} title="Reconstruct a 3D model from this">
               <Box size={15} /> 3D
+            </button>
+          )}
+          {asset.kind === "model3d" && (
+            <button className="tool-btn" onClick={() => onRemesh(asset)} title="Rebuild as a clean low-poly mesh (MeshFlow)">
+              <Pyramid size={15} /> Remesh
             </button>
           )}
           {asset.kind === "model3d" && (

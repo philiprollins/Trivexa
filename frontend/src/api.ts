@@ -57,6 +57,10 @@ export interface Model3DParams {
   front_yaw?: number;
   uv_size?: number;
   baker?: "upstream" | "lean";
+  remeshed?: boolean; // MeshFlow output
+  steps?: number;
+  fill_holes?: boolean;
+  source_faces?: number;
 }
 
 export interface Asset {
@@ -87,7 +91,7 @@ export type JobStatus = "queued" | "loading" | "running" | "done" | "error" | "c
 
 export interface Job {
   id: string;
-  kind: "image" | "multiview" | "model3d" | "texture";
+  kind: "image" | "multiview" | "model3d" | "texture" | "remesh";
   params: ImageParams & Partial<MultiviewParams> & Partial<Model3DParams>;
   status: JobStatus;
   step: number;
@@ -153,7 +157,7 @@ export const api = {
     request<{
       checkpoints: Checkpoint[];
       multiview: MultiviewSupport;
-      model3d: { triposr: boolean };
+      model3d: { triposr: boolean; meshflow: boolean };
       texture: TextureBaker;
     }>("/api/models"),
   samplers: () => request<{ samplers: Sampler[] }>("/api/samplers"),
@@ -185,6 +189,8 @@ export const api = {
     front_yaw: number;
     uv_size: number;
   }) => request<{ jobs: Job[] }>("/api/generate/texture", { method: "POST", body: JSON.stringify(params) }),
+  generateRemesh: (params: { source_asset: string; steps: number; seed: number; count: number; fill_holes: boolean }) =>
+    request<{ jobs: Job[] }>("/api/generate/remesh", { method: "POST", body: JSON.stringify(params) }),
   setThumbnail: (id: string, image: string) =>
     request<Asset>(`/api/assets/${id}/thumbnail`, { method: "POST", body: JSON.stringify({ image }) }),
   cancelJob: (id: string) => request(`/api/jobs/${id}/cancel`, { method: "POST" }),
