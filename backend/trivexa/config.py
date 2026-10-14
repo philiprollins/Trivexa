@@ -17,6 +17,7 @@ HF_CONFIG_DIR = DATA_DIR / "hf-configs"
 MV_ADAPTER_DIR = DATA_DIR / "models" / "mv-adapter"
 
 TEXTURE_WEIGHTS_DIR = DATA_DIR / "models" / "texture"  # RealESRGAN + LaMa for the upstream texture baker
+MESHFLOW_DIR = DATA_DIR / "models" / "meshflow"  # config.yaml + model.pth (facebook/meshflow)
 
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 

@@ -14,18 +14,22 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
 
-from .config import MV_ADAPTER_DIR, TEXTURE_WEIGHTS_DIR
+from .config import MESHFLOW_DIR, MV_ADAPTER_DIR, TEXTURE_WEIGHTS_DIR
 
 MV_ADAPTER_REPO = "huanngzh/mv-adapter"
 MV_ADAPTER_REVISION = "6de4033df6b53366f3c009d22f5ec434bb55e59f"
+# Gated: accept the license on huggingface.co/facebook/meshflow, then `hf auth login`, before downloading.
+MESHFLOW_REPO = "facebook/meshflow"
+MESHFLOW_REVISION = "9249a90e4997e105e533d6f502453fa3b344676f"
 
 
 @dataclass(frozen=True)
 class HubFile:
     repo: str
     revision: str
-    filename: str
-    dest: Path  # checksum comes from the Hub's LFS metadata
+    filename: str  # path in the repo; lands at dest/filename
+    dest: Path
+    sha256: str | None = None  # None: use the Hub's LFS metadata (small non-LFS files need it spelled out)
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,15 @@ ITEMS = {
         "big-lama.pt",
         TEXTURE_WEIGHTS_DIR,
     ),
+    # Artist-style remeshing of generated models (both files form one bundle in data/models/meshflow/).
+    "meshflow": HubFile(MESHFLOW_REPO, MESHFLOW_REVISION, "meshflow/model.pth", MESHFLOW_DIR.parent),
+    "meshflow-config": HubFile(
+        MESHFLOW_REPO,
+        MESHFLOW_REVISION,
+        "meshflow/config.yaml",
+        MESHFLOW_DIR.parent,
+        "8ad6180b747065775a1dd6f7d4949424b69d88eea298d43ba5599dbcd4d2a132",
+    ),
 }
 
 
@@ -67,7 +80,7 @@ def _sha256(path) -> str:
 
 
 def _expected_sha256(item: HubFile | UrlFile) -> str:
-    if isinstance(item, UrlFile):
+    if item.sha256:
         return item.sha256
     info = HfApi().model_info(item.repo, revision=item.revision, files_metadata=True)
     return next(s.lfs.sha256 for s in info.siblings if s.rfilename == item.filename)
