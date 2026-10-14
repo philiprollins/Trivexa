@@ -131,9 +131,27 @@ class MeshFlowEngine:
         out.vertices = out.vertices * radius + center
         colors = _vertex_colors(src)
         if colors is not None:
-            _, nearest = cKDTree(src.vertices).query(out.vertices)
-            out.visual = trimesh.visual.ColorVisuals(out, vertex_colors=colors[nearest])
+            out.visual = trimesh.visual.ColorVisuals(out, vertex_colors=_transfer_colors(src.vertices, colors, out))
         return out
+
+
+def _transfer_colors(src_vertices: np.ndarray, src_colors: np.ndarray, out: trimesh.Trimesh) -> np.ndarray:
+    """Each new vertex gets the mean colour of the source vertices within half its average edge length.
+
+    A low-poly vertex stands for a patch of the dense surface; copying only the nearest source vertex lets a dark
+    crevice (eye socket, joint gap) blacken every large triangle around it.
+    """
+    edge_len = out.edges_unique_length
+    total = np.bincount(out.edges_unique.ravel(), np.repeat(edge_len, 2), minlength=len(out.vertices))
+    count = np.bincount(out.edges_unique.ravel(), minlength=len(out.vertices))
+    radius = 0.5 * total / np.maximum(count, 1)
+    tree = cKDTree(src_vertices)
+    _, nearest = tree.query(out.vertices)
+    result = src_colors[nearest].astype(np.float64)
+    for i, idx in enumerate(tree.query_ball_point(out.vertices, radius)):
+        if idx:
+            result[i] = src_colors[idx].mean(0)
+    return result.round().astype(np.uint8)
 
 
 def _vertex_colors(mesh: trimesh.Trimesh) -> np.ndarray | None:
