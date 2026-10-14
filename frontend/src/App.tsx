@@ -55,8 +55,17 @@ const DEFAULT_MV_FORM: MultiviewForm = {
 
 const DEFAULT_3D_FORM: Model3DForm = { removeBg: true, foregroundRatio: 0.85, resolution: 256 };
 
-// MeshFlow's bundled config samples 28 steps.
-const DEFAULT_REMESH_FORM: RemeshForm = { count: 1, fillHoles: false, steps: 28, seed: 0, randomSeed: true };
+// MeshFlow's bundled config: 28 steps, image guidance 2.5.
+const DEFAULT_REMESH_FORM: RemeshForm = {
+  count: 1,
+  fillHoles: false,
+  steps: 28,
+  seed: 0,
+  randomSeed: true,
+  useImage: true,
+  removeBg: true,
+  guidance: 2.5,
+};
 
 // Defaults from MV-Adapter's texture_i2tex script (CFG 3, 768 px views); 40 steps instead of 50 for speed.
 const DEFAULT_TEXTURE_FORM: TextureForm = {
@@ -120,8 +129,14 @@ export default function App() {
   const [source3d, setSource3d] = useState<Source3D | null>(null);
   const [tripoAvailable, setTripoAvailable] = useState(false);
   const [meshflowAvailable, setMeshflowAvailable] = useState(false);
+  const [meshflowImageAvailable, setMeshflowImageAvailable] = useState(false);
   const [remeshForm, setRemeshForm] = usePersistentForm<RemeshForm>("trivexa.remeshForm", DEFAULT_REMESH_FORM);
-  const [remeshModel, setRemeshModel] = useState<Asset | null>(null);
+  const [remeshModel, setRemeshModelState] = useState<Asset | null>(null);
+  const [remeshReference, setRemeshReference] = useState<TextureReference | null>(null);
+  const setRemeshModel = useCallback((a: Asset | null) => {
+    setRemeshModelState(a);
+    setRemeshReference(null);
+  }, []);
   const [textureBaker, setTextureBaker] = useState<TextureBaker | null>(null);
   const [texForm, setTexForm, setTexFormState] = usePersistentForm<TextureForm>("trivexa.textureForm", DEFAULT_TEXTURE_FORM);
   const [texModel, setTexModelState] = useState<Asset | null>(null);
@@ -170,6 +185,7 @@ export default function App() {
       setMvSupport(multiview);
       setTripoAvailable(model3d.triposr);
       setMeshflowAvailable(model3d.meshflow);
+      setMeshflowImageAvailable(model3d.meshflow_image);
       const firstSdxl = checkpoints.find((c) => c.arch === "sdxl")?.id ?? "";
       setMvFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
       setTexFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
@@ -321,6 +337,11 @@ export default function App() {
         seed: remeshForm.randomSeed ? -1 : remeshForm.seed,
         count: remeshForm.count,
         fill_holes: remeshForm.fillHoles,
+        use_image: remeshForm.useImage && meshflowImageAvailable,
+        reference_asset: remeshReference?.type === "asset" ? remeshReference.asset.id : null,
+        reference_image: remeshReference?.type === "upload" ? remeshReference.dataUrl : null,
+        remove_bg: remeshForm.removeBg,
+        guidance: remeshForm.guidance,
       });
       if (created[0]) setSelection({ kind: "job", id: created[0].id });
       setTab("assets");
@@ -465,10 +486,15 @@ export default function App() {
             setForm={setRemeshForm}
             model={remeshModel}
             setModel={setRemeshModel}
+            reference={remeshReference}
+            setReference={setRemeshReference}
             selected={selectedAsset}
             available={meshflowAvailable}
+            imageAvailable={meshflowImageAvailable}
+            bgAvailable={mvSupport?.bg_removal ?? false}
             onGenerate={generateRemesh}
             submitting={submitting}
+            notify={notify}
           />
         ) : tool === "texture" ? (
           <TexturePanel

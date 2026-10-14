@@ -61,6 +61,8 @@ export interface Model3DParams {
   steps?: number;
   fill_holes?: boolean;
   source_faces?: number;
+  use_image?: boolean; // remesh guided by a reference image (DINOv3)
+  guidance?: number;
 }
 
 export interface Asset {
@@ -157,7 +159,7 @@ export const api = {
     request<{
       checkpoints: Checkpoint[];
       multiview: MultiviewSupport;
-      model3d: { triposr: boolean; meshflow: boolean };
+      model3d: { triposr: boolean; meshflow: boolean; meshflow_image: boolean };
       texture: TextureBaker;
     }>("/api/models"),
   samplers: () => request<{ samplers: Sampler[] }>("/api/samplers"),
@@ -189,7 +191,18 @@ export const api = {
     front_yaw: number;
     uv_size: number;
   }) => request<{ jobs: Job[] }>("/api/generate/texture", { method: "POST", body: JSON.stringify(params) }),
-  generateRemesh: (params: { source_asset: string; steps: number; seed: number; count: number; fill_holes: boolean }) =>
+  generateRemesh: (params: {
+    source_asset: string;
+    steps: number;
+    seed: number;
+    count: number;
+    fill_holes: boolean;
+    use_image: boolean;
+    reference_asset?: string | null;
+    reference_image?: string | null;
+    remove_bg: boolean;
+    guidance: number;
+  }) =>
     request<{ jobs: Job[] }>("/api/generate/remesh", { method: "POST", body: JSON.stringify(params) }),
   setThumbnail: (id: string, image: string) =>
     request<Asset>(`/api/assets/${id}/thumbnail`, { method: "POST", body: JSON.stringify({ image }) }),

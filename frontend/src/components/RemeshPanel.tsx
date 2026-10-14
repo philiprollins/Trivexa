@@ -1,7 +1,8 @@
-import { ChevronDown, Pyramid, X, Zap } from "lucide-react";
-import { useState } from "react";
+import { ChevronDown, ImagePlus, Pyramid, X, Zap } from "lucide-react";
+import { useRef, useState } from "react";
 import type { Asset } from "../api";
 import { SeedInput, Section, Segmented, Slider } from "./controls";
+import type { TextureReference } from "./TexturePanel";
 
 export interface RemeshForm {
   count: number;
@@ -9,6 +10,9 @@ export interface RemeshForm {
   steps: number;
   seed: number;
   randomSeed: boolean;
+  useImage: boolean;
+  removeBg: boolean;
+  guidance: number;
 }
 
 interface Props {
@@ -16,16 +20,40 @@ interface Props {
   setForm: (f: Partial<RemeshForm>) => void;
   model: Asset | null;
   setModel: (a: Asset | null) => void;
+  reference: TextureReference | null; // null = the model's own input image
+  setReference: (r: TextureReference | null) => void;
   selected: Asset | null;
   available: boolean;
+  imageAvailable: boolean; // DINOv3 weights present
+  bgAvailable: boolean;
   onGenerate: () => void;
   submitting: boolean;
+  notify: (msg: string, error?: boolean) => void;
 }
+
+const MAX_UPLOAD = 20 * 1024 * 1024;
 
 export function RemeshPanel(p: Props) {
   const { form, setForm, model } = p;
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const canGenerate = p.available && model !== null && !p.submitting;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const useImage = form.useImage && p.imageAvailable;
+  const canGenerate = p.available && model !== null && !(useImage && form.removeBg && !p.bgAvailable) && !p.submitting;
+
+  const readFile = (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return p.notify("That file isn't an image", true);
+    if (file.size > MAX_UPLOAD) return p.notify("Image is larger than 20 MB", true);
+    const reader = new FileReader();
+    reader.onload = () => p.setReference({ type: "upload", dataUrl: reader.result as string, name: file.name });
+    reader.readAsDataURL(file);
+  };
+
+  const refSrc = p.reference
+    ? p.reference.type === "asset"
+      ? p.reference.asset.thumb_url
+      : p.reference.dataUrl
+    : model?.input_url;
 
   return (
     <aside className="panel left-panel">
@@ -60,11 +88,54 @@ export function RemeshPanel(p: Props) {
           <div className="engine-card">
             <strong>MeshFlow</strong>
             <span>
-              Rebuilds the shape as a clean, artist-style low-poly mesh (~0.5–2k faces) · colours carry over from the
+              Rebuilds the shape as a clean, artist-style low-poly mesh (~1–2k faces) · colours carry over from the
               source as vertex colours · texture it afterwards for detail
             </span>
           </div>
         </Section>
+
+        <Section label="Guide with">
+          <Segmented
+            options={[
+              { value: "image", label: "Shape + image", disabled: !p.imageAvailable },
+              { value: "shape", label: "Shape only" },
+            ]}
+            value={useImage ? "image" : "shape"}
+            onChange={(v) => setForm({ useImage: v === "image" })}
+          />
+          <p className="hint">
+            {p.imageAvailable
+              ? "An image keeps thin parts and small details (antennae, fingers) that shape-only smooths away; ~2× slower."
+              : "Image guidance needs DINOv3 ViT-L/16 in data/models/meshflow."}
+          </p>
+        </Section>
+
+        {useImage && (
+          <Section label="Reference image">
+            <div className="ref-row">
+              <div className="ref-thumb">{refSrc ? <img src={refSrc} alt="Reference" /> : <ImagePlus size={18} />}</div>
+              <div className="ref-actions">
+                <span className="hint">{p.reference ? "Custom reference" : "The model's own input image"}</span>
+                <div className="ref-buttons">
+                  <button className="link-btn" onClick={() => fileInput.current?.click()}>
+                    Upload…
+                  </button>
+                  {p.selected?.kind === "image" && (
+                    <button className="link-btn" onClick={() => p.setReference({ type: "asset", asset: p.selected! })}>
+                      Use selected image
+                    </button>
+                  )}
+                  {p.reference && (
+                    <button className="link-btn" onClick={() => p.setReference(null)}>
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </div>
+              <input ref={fileInput} type="file" accept="image/*" hidden onChange={(e) => readFile(e.target.files?.[0])} />
+            </div>
+          </Section>
+        )}
 
         <Section label="Variations">
           <Segmented
@@ -72,7 +143,7 @@ export function RemeshPanel(p: Props) {
             value={form.count}
             onChange={(count) => setForm({ count })}
           />
-          <p className="hint">Each seed gives a different topology; pick the cleanest.</p>
+          <p className="hint">Each seed gives a different topology and face count; pick the cleanest.</p>
         </Section>
 
         <Section label="Small holes">
@@ -86,6 +157,19 @@ export function RemeshPanel(p: Props) {
           />
         </Section>
 
+        {useImage && (
+          <Section label="Reference background">
+            <Segmented
+              options={[
+                { value: "remove", label: "Remove", disabled: !p.bgAvailable },
+                { value: "keep", label: "Keep" },
+              ]}
+              value={form.removeBg ? "remove" : "keep"}
+              onChange={(v) => setForm({ removeBg: v === "remove" })}
+            />
+          </Section>
+        )}
+
         <button className="collapse-head" onClick={() => setShowAdvanced((v) => !v)}>
           Sampling settings
           <ChevronDown size={16} className={showAdvanced ? "rot" : ""} />
@@ -93,6 +177,16 @@ export function RemeshPanel(p: Props) {
         {showAdvanced && (
           <div className="advanced">
             <Slider label="Steps" min={8} max={60} step={1} value={form.steps} onChange={(steps) => setForm({ steps })} />
+            {useImage && (
+              <Slider
+                label="Image guidance"
+                min={1}
+                max={6}
+                step={0.25}
+                value={form.guidance}
+                onChange={(guidance) => setForm({ guidance })}
+              />
+            )}
             <SeedInput seed={form.seed} random={form.randomSeed} onChange={(seed, randomSeed) => setForm({ seed, randomSeed })} />
           </div>
         )}
