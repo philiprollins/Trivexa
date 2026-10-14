@@ -14,13 +14,15 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
 
-from .config import MESHFLOW_DIR, MV_ADAPTER_DIR, TEXTURE_WEIGHTS_DIR
+from .config import MESHFLOW_DIR, MV_ADAPTER_DIR, SKINTOKENS_DIR, TEXTURE_WEIGHTS_DIR
 
 MV_ADAPTER_REPO = "huanngzh/mv-adapter"
 MV_ADAPTER_REVISION = "6de4033df6b53366f3c009d22f5ec434bb55e59f"
 # Gated: accept the license on huggingface.co/facebook/meshflow, then `hf auth login`, before downloading.
 MESHFLOW_REPO = "facebook/meshflow"
 MESHFLOW_REVISION = "9249a90e4997e105e533d6f502453fa3b344676f"
+SKINTOKENS_REPO = "VAST-AI/SkinTokens"
+SKINTOKENS_REVISION = "79736cad0fd84de384d5eede659b4ebd24effe33"
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,14 @@ ITEMS = {
         "meshflow/config.yaml",
         MESHFLOW_DIR.parent,
         "8ad6180b747065775a1dd6f7d4949424b69d88eea298d43ba5599dbcd4d2a132",
+    ),
+    # Auto-rigging (MIT). The TokenRig checkpoint already holds the skin-token VAE, so upstream's separate
+    # skin_vae_2_10_32768/last.ckpt (read only for its config, which engines/skintokens.py spells out) is skipped.
+    "skintokens": HubFile(
+        SKINTOKENS_REPO,
+        SKINTOKENS_REVISION,
+        "experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt",
+        SKINTOKENS_DIR,
     ),
 }
 
