@@ -124,7 +124,11 @@ def list_models():
             "tg2mv": adapter_available("tg2mv"),
             "bg_removal": bg_remover.available(),
         },
-        "model3d": {"triposr": triposr.available(), "meshflow": meshflow_engine.available()},
+        "model3d": {
+            "triposr": triposr.available(),
+            "meshflow": meshflow_engine.available(),
+            "meshflow_image": meshflow_engine.image_available(),
+        },
         "texture": {"baker": TEXTURE_BAKER, "note": TEXTURE_BAKER_NOTE},
     }
 
@@ -357,6 +361,12 @@ class RemeshRequest(BaseModel):
     seed: int = Field(-1, ge=-1, le=2**32 - 1)
     count: int = Field(1, ge=1, le=8)
     fill_holes: bool = False
+    # Image guidance (DINOv3): the model's own input image by default, or a gallery image / upload.
+    use_image: bool = True
+    reference_asset: str | None = None
+    reference_image: str | None = Field(None, max_length=40_000_000)
+    remove_bg: bool = True
+    guidance: float = Field(meshflow_engine.DEFAULT_GUIDANCE, ge=1.0, le=10.0)
 
 
 @app.post("/api/generate/remesh")
@@ -367,26 +377,40 @@ async def generate_remesh(req: RemeshRequest):
     if not meshflow_engine.available():
         raise HTTPException(400, "MeshFlow weights not found (data/models/meshflow)")
     mesh_path = OUTPUTS_DIR / source["model_urls"]["glb"].removeprefix("/files/")
-    input_path = OUTPUTS_DIR / source["input_url"].removeprefix("/files/")
+    input_image = Image.open(OUTPUTS_DIR / source["input_url"].removeprefix("/files/")).copy()
+    reference = None
+    if req.use_image:
+        if not meshflow_engine.image_available():
+            raise HTTPException(400, f"DINOv3 weights not found ({meshflow_engine.DINOV3_WEIGHTS.name} in data/models/meshflow)")
+        if req.remove_bg and not bg_remover.available():
+            raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
+        if req.reference_asset or req.reference_image:
+            reference, _ = _load_source_image(req.reference_asset, req.reference_image)
+        else:
+            reference = input_image
+    image_only = set() if req.use_image else {"reference_asset", "remove_bg", "guidance"}
     sp = source["params"]
     # TripoSR models from before "front" was recorded face -Z: turn the remesh to face +Z like everything newer.
     half_turn = sp.get("front") != "+z" and sp.get("engine") == "triposr"
     base_seed = random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed
     created = []
     for i in range(req.count):
-        params = req.model_dump(exclude={"count"}) | {
+        params = req.model_dump(exclude={"count", "reference_image"} | image_only) | {
             "seed": (base_seed + i) % 2**32,
             "engine": sp.get("engine", "mesh").removesuffix(" + mv-adapter") + " + meshflow",
             "front": "+z",
             "remeshed": True,
             "source_faces": sp.get("faces"),
         }
-        job = Job(kind="remesh", params=params, run=_remesh_runner(mesh_path, input_path, half_turn, params, source["id"]))
+        run = _remesh_runner(mesh_path, reference or input_image, reference, half_turn, params, source["id"])
+        job = Job(kind="remesh", params=params, run=run)
         created.append(jobs.submit(job).public())
     return {"jobs": created}
 
 
-def _remesh_runner(mesh_path, input_path, half_turn: bool, params: dict, parent_id: str):
+def _remesh_runner(
+    mesh_path, shown_image: Image.Image, reference_src: Image.Image | None, half_turn: bool, params: dict, parent_id: str
+):
     def run(job: Job) -> dict:
         import numpy as np
         import trimesh
@@ -395,12 +419,24 @@ def _remesh_runner(mesh_path, input_path, half_turn: bool, params: dict, parent_
         mesh = trimesh.load(mesh_path, force="mesh")
         if half_turn:
             mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [0, 1, 0]))
+        reference = None
+        if reference_src is not None:
+            cutout = bg_remover.remove(reference_src) if params["remove_bg"] else reference_src
+            # Same crop as MeshFlow's own preprocessing, which flattens onto white.
+            reference = prepare_reference(cutout, 512, background=1.0)
         out = remesher.generate(
-            MeshFlowParams(mesh=mesh, steps=params["steps"], seed=params["seed"], fill_holes=params["fill_holes"]),
+            MeshFlowParams(
+                mesh=mesh,
+                steps=params["steps"],
+                seed=params["seed"],
+                fill_holes=params["fill_holes"],
+                image=reference,
+                guidance=params.get("guidance", 1.0),
+            ),
             on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
             is_cancelled=job.cancel_requested.is_set,
         )
-        return store.save_model3d(out, Image.open(input_path).copy(), params, parent_id)
+        return store.save_model3d(out, shown_image, params, parent_id)
 
     return run
 
