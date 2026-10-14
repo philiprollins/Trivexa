@@ -2,7 +2,8 @@
 
 MeshFlow samples the input's surface, voxelizes it as RoPE positions for a flow-matching DiT, and decodes the
 latents with its MeshVAE into vertices plus an adjacency graph whose triangles form the new mesh (~0.5-2k faces).
-Reference-image conditioning needs DINOv3 (gated weights) and isn't wired up: the zero visual condition is used.
+An optional reference image is encoded with DINOv3 ViT-L/16 (weights from Meta, loaded on first use) and steers the
+DiT through cross-attention with classifier-free guidance; without one the zero visual condition is used.
 """
 
 import logging
@@ -11,10 +12,13 @@ from typing import Callable
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import trimesh
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from omegaconf import OmegaConf
+from PIL import Image
 from scipy.spatial import cKDTree
+from torchvision import transforms
 
 from . import Cancelled
 from ..config import MESHFLOW_DIR
@@ -23,10 +27,14 @@ from ..vendor.meshflow.models.meshflow_dit import build_meshflow_dit
 from ..vendor.meshflow.models.meshflow_vae import build_mesh_model
 from ..vendor.meshflow.pipelines.meshflow_pipeline import MeshFlowPipeline
 from ..vendor.meshflow.pipelines.utils import flow_sample
+from ..vendor.dinov3.models.vision_transformer import DinoVisionTransformer
 
 log = logging.getLogger(__name__)
 
 DEFAULT_STEPS = 28  # the bundled config's num_inference_steps
+DEFAULT_GUIDANCE = 2.5  # the bundled config's guidance_scale (CFG on the image condition)
+# The backbone MeshFlow's config names (visual_condition.hub_model: dinov3_vitl16), from Meta's DINOv3 downloads.
+DINOV3_WEIGHTS = MESHFLOW_DIR / "dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
 
 
 @dataclass
@@ -35,10 +43,58 @@ class MeshFlowParams:
     steps: int = DEFAULT_STEPS
     seed: int = 0
     fill_holes: bool = False
+    image: Image.Image | None = None  # reference, already cut out and flattened (see prepare_reference)
+    guidance: float = DEFAULT_GUIDANCE
 
 
 def available() -> bool:
     return all((MESHFLOW_DIR / f).is_file() for f in ("config.yaml", "model.pth"))
+
+
+def image_available() -> bool:
+    return DINOV3_WEIGHTS.is_file()
+
+
+class _DinoEncoder(torch.nn.Module):
+    """MeshFlow's DINOv3Encoder.encode_image on a locally built backbone (upstream loads it through torch.hub)."""
+
+    def __init__(self, image_size: int):
+        super().__init__()
+        # dinov3_vitl16 (LVD-1689M) as built by dinov3/hub/backbones.py.
+        self.dino_model = DinoVisionTransformer(
+            img_size=224,
+            patch_size=16,
+            pos_embed_rope_base=100,
+            pos_embed_rope_normalize_coords="separate",
+            pos_embed_rope_rescale_coords=2,
+            pos_embed_rope_dtype="fp32",
+            embed_dim=1024,
+            depth=24,
+            num_heads=16,
+            ffn_ratio=4,
+            qkv_bias=True,
+            layerscale_init=1.0e-05,
+            norm_layer="layernormbf16",
+            ffn_layer="mlp",
+            ffn_bias=True,
+            proj_bias=True,
+            n_storage_tokens=4,
+            mask_k_bias=True,
+        )
+        self.dino_model.load_state_dict(torch.load(DINOV3_WEIGHTS, map_location="cpu", weights_only=True))
+        self.dino_model.eval().requires_grad_(False)
+        self.transform = transforms.Compose([
+            transforms.Resize(image_size, transforms.InterpolationMode.BICUBIC, antialias=True),
+            transforms.CenterCrop(image_size),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+    def encode_image(self, image: Image.Image) -> torch.Tensor:
+        ref = next(self.dino_model.parameters())
+        x = self.transform(transforms.ToTensor()(image.convert("RGB")).unsqueeze(0)).to(ref.device, ref.dtype)
+        with torch.autocast(device_type=ref.device.type, enabled=False):
+            out = self.dino_model.forward_features(x)["x_prenorm"]
+        return F.layer_norm(out, out.shape[-1:])
 
 
 def _subtree(state: dict, prefix: str) -> dict:
@@ -78,6 +134,12 @@ class MeshFlowEngine:
         pipe._device = self.device
         pipe._empty_visual_embeds = make_empty_visual_embeds(int(visual_cfg["image_size"]), embed_dim)
         self.pipe = pipe
+        self._image_size = int(visual_cfg["image_size"])
+
+    def _load_image_encoder(self) -> None:
+        if self.pipe.models["visual_encoder"] is None:
+            log.info("Loading DINOv3 ViT-L/16 from %s", DINOV3_WEIGHTS)
+            self.pipe.models["visual_encoder"] = _DinoEncoder(self._image_size).to(self.device)
 
     def unload(self) -> None:
         if self.pipe is None:
@@ -104,6 +166,11 @@ class MeshFlowEngine:
         points, _ = trimesh.sample.sample_surface(unit, pipe.num_verts, seed=p.seed)
         surface = torch.from_numpy(points.astype(np.float32)).unsqueeze(0).to(self.device)
 
+        guidance = p.guidance if p.image is not None else 1.0  # CFG only mixes in the image condition
+        if p.image is not None:
+            self._load_image_encoder()
+        visual_cond = pipe.get_visual_cond(p.image, guidance_scale=guidance, preprocess_image=False)
+
         denoiser = pipe.models["denoiser"]
         latents = None
         # Same as MeshFlowPipeline.sample_latent, but stepping the sampler ourselves for progress and cancel.
@@ -114,9 +181,9 @@ class MeshFlowEngine:
                     denoiser,
                     (denoiser.input_size, denoiser.in_channels),
                     steps=p.steps,
-                    visual_cond=pipe.get_visual_cond(None, guidance_scale=1.0),
-                    guidance_scale=1.0,
-                    do_classifier_free_guidance=False,
+                    visual_cond=visual_cond,
+                    guidance_scale=guidance,
+                    do_classifier_free_guidance=guidance != 1.0,
                     generator=torch.Generator(device=self.device).manual_seed(p.seed),
                     device=self.device,
                     joint_attention_kwargs=pipe.get_rope_cond(surface),

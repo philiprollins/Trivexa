@@ -60,8 +60,11 @@ class MVParams:
     control_images: torch.Tensor | None = None  # ig2mv/tg2mv: (6, 6, H, W) position+normal maps in [0, 1]
 
 
-def prepare_reference(rgba: Image.Image, size: int = VIEW_SIZE) -> Image.Image:
-    """Crop to the subject, fit it to 90% of a square canvas and flatten onto grey (what i2mv was trained on)."""
+def prepare_reference(rgba: Image.Image, size: int = VIEW_SIZE, background: float = 0.5) -> Image.Image:
+    """Crop to the subject, fit it to 90% of a square canvas and flatten onto grey (what i2mv was trained on).
+
+    MeshFlow's reference preprocessing uses the same crop on white (background=1.0).
+    """
     arr = np.asarray(rgba.convert("RGBA"))
     alpha = arr[..., 3] > 0
     if not alpha.any():
@@ -79,7 +82,7 @@ def prepare_reference(rgba: Image.Image, size: int = VIEW_SIZE) -> Image.Image:
     top, left = (size - h) // 2, (size - w) // 2
     canvas[top : top + h, left : left + w] = crop
     rgba_f = canvas.astype(np.float32) / 255
-    rgb = rgba_f[..., :3] * rgba_f[..., 3:] + (1 - rgba_f[..., 3:]) * 0.5
+    rgb = rgba_f[..., :3] * rgba_f[..., 3:] + (1 - rgba_f[..., 3:]) * background
     return Image.fromarray((rgb * 255).clip(0, 255).astype(np.uint8))
 
 
