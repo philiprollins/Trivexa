@@ -15,9 +15,12 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
 - **Remesh**: rebuilds a 3D model as a clean, artist-style low-poly mesh (~1–2.5k faces instead of TripoSR's
   ~80k) with [MeshFlow](https://github.com/facebookresearch/meshflow). By default it is guided by the model's
   input image (or another image) through DINOv3, which keeps thin parts and details such as antennae and fingers:
-  ~10 s per variation; shape-only guidance is ~5 s but smooths those away. The face count can't be set (the
-  released checkpoint has no vertex-count control); each seed gives a different topology and count, so make a few
-  variations. Colours carry over as vertex colours; texture the result afterwards. MeshFlow is under the FAIR
+  ~10 s per variation; shape-only guidance is ~5 s but smooths those away. An exact face count can't be set (the
+  released checkpoint has no vertex-count input, so upstream's `--num_verts` is ignored), but **Detail** (Low /
+  Normal / High / Max) sets how dense the mesh may get by changing the latent sequence length: ~0.8×, 1×, ~1.6× and
+  3–6× the faces on curved shapes (flat, hard-surface parts barely change), at ~7 / 10 / 17 / 25 s. Max is beyond
+  what MeshFlow was trained for and has many more overlapping faces. Each seed also gives a different topology and
+  count, so make a few variations. Colours carry over as vertex colours; texture the result afterwards. MeshFlow is under the FAIR
   Noncommercial Research License, which also covers its outputs.
 - **Texture**: gives a 3D model a proper UV texture from a reference image (by default the image it was made from)
   or from a prompt alone: MV-Adapter's geometry-guided `ig2mv` (image) or `tg2mv` (prompt) generates six views

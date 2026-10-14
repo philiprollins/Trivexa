@@ -91,7 +91,10 @@ anything else resident.
 - `meshflow.py` — MeshFlow DiT + MeshVAE decoder, optionally guided by a reference image encoded with DINOv3
   ViT-L/16 (built locally instead of via torch.hub; CFG 2.5 on the image condition, ~10 s; shape-only ~5 s, no CFG).
   The image is cut out with BiRefNet and flattened on white (`prepare_reference(..., background=1.0)`). The checkpoint
-  has no vertex-count control (`use_proj_cond_on_temb` is off), so the face count can't be set. Colours are
+  has no vertex-count input (`use_proj_cond_on_temb` is off; forcing it on fails to load `t_embedder.cond_proj`), so
+  "Detail" instead varies the latent sequence length (`DETAIL_LENGTHS`, 3072–8192; trained at 4096). That length is
+  the most vertices the decoder can emit, and every layer is length-agnostic, so one loaded model serves all levels.
+  Below ~2048 meshes tear; 8192 is markedly more non-manifold. Colours are
   area-averaged from the source. ~4.2 GB resident (+1.2 GB DINOv3), ~6.3 GB peak. Output is in the source's frame but is
   **non-manifold** in places (every 3-clique of the predicted edge graph becomes a triangle), which crashes UVAtlas:
   `texture_upstream` detaches faces on non-manifold edges before unwrapping.
