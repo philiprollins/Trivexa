@@ -147,7 +147,12 @@ function Details({ asset }: { asset: Asset | null }) {
   );
 }
 
-const ENGINE_NAMES: Record<string, string> = { triposr: "TripoSR", meshflow: "MeshFlow remesh", "mv-adapter": "MV-Adapter texture" };
+const ENGINE_NAMES: Record<string, string> = {
+  triposr: "TripoSR",
+  meshflow: "MeshFlow remesh",
+  "mv-adapter": "MV-Adapter texture",
+  skintokens: "SkinTokens rig",
+};
 
 /** "triposr + meshflow + mv-adapter" -> "TripoSR + MeshFlow remesh + MV-Adapter texture" */
 const engineLabel = (engine: string | undefined) =>
@@ -157,7 +162,15 @@ function Model3DDetails({ asset }: { asset: Asset }) {
   const pr = asset.params;
   const rows: [string, string | number][] = [
     ["Engine", engineLabel(pr.engine)],
-    ...(pr.textured
+    ...(pr.rigged
+      ? ([
+          ["Skeleton", pr.style === "humanoid" ? "Humanoid" : "Auto"],
+          ["Bones", pr.bones ?? "—"],
+          ["Beams", pr.beams ?? "—"],
+          ["Temperature", pr.temperature ?? "—"],
+          ["Seed", pr.seed ?? "—"],
+        ] as [string, string | number][])
+      : pr.textured
       ? ([
           ["Texture", `${pr.uv_size} × ${pr.uv_size}`],
           // Textured models from before the baker setting existed were all made with the lean baker.
@@ -168,7 +181,7 @@ function Model3DDetails({ asset }: { asset: Asset }) {
       : []),
     ["Faces", pr.faces?.toLocaleString() ?? "—"],
     ["Vertices", pr.vertices?.toLocaleString() ?? "—"],
-    ...(pr.textured
+    ...(pr.textured || pr.rigged
       ? []
       : pr.remeshed
         ? ([

@@ -16,6 +16,7 @@ import { ImagePanel, SUPPORTED_ARCHS, sizeForArch, type ImageForm } from "./comp
 import { Model3DPanel, type Model3DForm, type Source3D } from "./components/Model3DPanel";
 import { MODE_CFG, MultiviewPanel, type MultiviewForm, type Reference } from "./components/MultiviewPanel";
 import { RemeshPanel, type RemeshForm } from "./components/RemeshPanel";
+import { RigPanel, type RigForm } from "./components/RigPanel";
 import { defaultFrontYaw, TexturePanel, type TextureForm, type TextureReference } from "./components/TexturePanel";
 import { Viewer } from "./components/Viewer";
 import { useJobs } from "./useJobs";
@@ -67,6 +68,9 @@ const DEFAULT_REMESH_FORM: RemeshForm = {
   removeBg: true,
   guidance: 2.5,
 };
+
+// SkinTokens' demo defaults: 10 beams, temperature 1.
+const DEFAULT_RIG_FORM: RigForm = { style: "auto", count: 1, beams: 10, temperature: 1, seed: 0, randomSeed: true };
 
 // Defaults from MV-Adapter's texture_i2tex script (CFG 3, 768 px views); 40 steps instead of 50 for speed.
 const DEFAULT_TEXTURE_FORM: TextureForm = {
@@ -138,6 +142,9 @@ export default function App() {
     setRemeshModelState(a);
     setRemeshReference(null);
   }, []);
+  const [skintokensAvailable, setSkintokensAvailable] = useState(false);
+  const [rigForm, setRigForm] = usePersistentForm<RigForm>("trivexa.rigForm", DEFAULT_RIG_FORM);
+  const [rigModel, setRigModel] = useState<Asset | null>(null);
   const [textureBaker, setTextureBaker] = useState<TextureBaker | null>(null);
   const [texForm, setTexForm, setTexFormState] = usePersistentForm<TextureForm>("trivexa.textureForm", DEFAULT_TEXTURE_FORM);
   const [texModel, setTexModelState] = useState<Asset | null>(null);
@@ -187,6 +194,7 @@ export default function App() {
       setTripoAvailable(model3d.triposr);
       setMeshflowAvailable(model3d.meshflow);
       setMeshflowImageAvailable(model3d.meshflow_image);
+      setSkintokensAvailable(model3d.skintokens);
       const firstSdxl = checkpoints.find((c) => c.arch === "sdxl")?.id ?? "";
       setMvFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
       setTexFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
@@ -354,6 +362,32 @@ export default function App() {
     }
   };
 
+  const generateRig = async () => {
+    if (!rigModel) return;
+    setSubmitting(true);
+    try {
+      const { jobs: created } = await api.generateRig({
+        source_asset: rigModel.id,
+        style: rigForm.style,
+        seed: rigForm.randomSeed ? -1 : rigForm.seed,
+        count: rigForm.count,
+        beams: rigForm.beams,
+        temperature: rigForm.temperature,
+      });
+      if (created[0]) setSelection({ kind: "job", id: created[0].id });
+      setTab("assets");
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const makeRig = (a: Asset) => {
+    setRigModel(a);
+    setTool("rig");
+  };
+
   const makeRemesh = (a: Asset) => {
     setRemeshModel(a);
     setTool("remesh");
@@ -482,7 +516,18 @@ export default function App() {
       />
       <div className="workspace">
         <Rail active={tool} onSelect={setTool} />
-        {tool === "remesh" ? (
+        {tool === "rig" ? (
+          <RigPanel
+            form={rigForm}
+            setForm={setRigForm}
+            model={rigModel}
+            setModel={setRigModel}
+            selected={selectedAsset}
+            available={skintokensAvailable}
+            onGenerate={generateRig}
+            submitting={submitting}
+          />
+        ) : tool === "remesh" ? (
           <RemeshPanel
             form={remeshForm}
             setForm={setRemeshForm}
@@ -566,6 +611,7 @@ export default function App() {
           onMake3D={make3D}
           onTexture={makeTexture}
           onRemesh={makeRemesh}
+          onRig={makeRig}
           onModelSnapshot={saveModelSnapshot}
           notify={notify}
         />

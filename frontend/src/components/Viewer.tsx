@@ -1,4 +1,4 @@
-import { Box, Copy, Download, ExternalLink, Layers, PaintBucket, Pyramid, RotateCcw, Rotate3d, Star, Trash2, X } from "lucide-react";
+import { Bone, Box, Copy, Download, ExternalLink, Layers, PaintBucket, PersonStanding, Pyramid, RotateCcw, Rotate3d, Star, Trash2, X } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 import type { Asset, Job } from "../api";
 import { Segmented } from "./controls";
@@ -20,20 +20,26 @@ interface Props {
   onMake3D: (a: Asset) => void;
   onTexture: (a: Asset) => void;
   onRemesh: (a: Asset) => void;
+  onRig: (a: Asset) => void;
   onModelSnapshot: (a: Asset, dataUrl: string) => void;
   notify: (msg: string) => void;
 }
 
 const VIEW_NAMES: Record<number, string> = { 0: "Front", 90: "Right", 180: "Back", 270: "Left" };
 
+const modelLabel = (p: Asset["params"]) =>
+  p.rigged ? `Rigged model · ${p.bones} bones` : p.textured ? "Textured model" : p.remeshed ? "Remeshed model" : "3D model";
+
 export function Viewer(props: Props) {
-  const { asset, job, queuePosition, onCancel, onToggleFavorite, onDelete, onReuse, onMakeMultiview, onMake3D, onTexture, onRemesh, notify } = props;
+  const { asset, job, queuePosition, onCancel, onToggleFavorite, onDelete, onReuse, onMakeMultiview, onMake3D, onTexture, onRemesh, onRig, notify } = props;
   const [renderMode, setRenderMode] = useState<RenderMode>("color");
   const [autoRotate, setAutoRotate] = useState(true);
+  const [showBones, setShowBones] = useState(true);
+  const [posing, setPosing] = useState(false);
 
   if (job && job.status !== "done") {
     const [width, height] =
-      job.kind === "multiview" || job.kind === "texture" ? [3, 2] : job.kind === "model3d" || job.kind === "remesh" ? [1, 1] : [job.params.width, job.params.height];
+      job.kind === "multiview" || job.kind === "texture" ? [3, 2] : job.kind === "model3d" || job.kind === "remesh" || job.kind === "rig" ? [1, 1] : [job.params.width, job.params.height];
     const pct = job.total ? Math.round((job.step / job.total) * 100) : 0;
     return (
       <main className="viewer">
@@ -43,10 +49,14 @@ export function Viewer(props: Props) {
             <div className="pending-overlay">
               {job.status === "queued" && <span>Queued{queuePosition > 0 ? ` · #${queuePosition}` : ""}</span>}
               {job.status === "loading" && (
-                <span>{{ image: "Loading model…", texture: "Unwrapping UVs & preparing…", remesh: "Loading MeshFlow…" }[job.kind as string] ?? "Preparing…"}</span>
+                <span>{{ image: "Loading model…", texture: "Unwrapping UVs & preparing…", remesh: "Loading MeshFlow…", rig: "Loading SkinTokens…" }[job.kind as string] ?? "Preparing…"}</span>
               )}
               {job.status === "running" && (
-                <span>{job.kind === "model3d" ? ["Encoding image…", "Extracting mesh…", "Saving…"][job.step - 1] : `Step ${job.step} / ${job.total}`}</span>
+                <span>{job.kind === "model3d"
+                    ? ["Encoding image…", "Extracting mesh…", "Saving…"][job.step - 1]
+                    : job.kind === "rig"
+                    ? `${job.step < 40 ? "Predicting skeleton" : "Predicting skin weights"} · ${job.step}%`
+                    : `Step ${job.step} / ${job.total}`}</span>
               )}
               {job.status === "error" && <span className="error-text">Failed: {job.error}</span>}
               {job.status === "cancelled" && <span>Cancelled</span>}
@@ -64,6 +74,8 @@ export function Viewer(props: Props) {
               ? "Texturing 3D model"
               : job.kind === "remesh"
               ? "Remeshing 3D model"
+              : job.kind === "rig"
+              ? "Rigging 3D model"
               : job.params.prompt || (job.kind === "multiview" ? "Multiview from image" : job.kind === "model3d" ? "3D model from image" : "")}
           </p>
           {(job.status === "queued" || job.status === "loading" || job.status === "running") && (
@@ -107,6 +119,8 @@ export function Viewer(props: Props) {
                 url={asset.model_urls.glb}
                 mode={renderMode}
                 autoRotate={autoRotate}
+                skeleton={!!asset.params.rigged && showBones}
+                pose={!!asset.params.rigged && posing}
                 onSnapshot={asset.thumb_rendered ? undefined : (dataUrl) => props.onModelSnapshot(asset, dataUrl)}
               />
             </Suspense>
@@ -127,6 +141,24 @@ export function Viewer(props: Props) {
               >
                 <Rotate3d size={16} />
               </button>
+              {asset.params.rigged && (
+                <>
+                  <button
+                    className={`icon-btn ${showBones ? "active" : ""}`}
+                    onClick={() => setShowBones((v) => !v)}
+                    title={showBones ? "Hide bones" : "Show bones"}
+                  >
+                    <Bone size={16} />
+                  </button>
+                  <button
+                    className={`icon-btn ${posing ? "active" : ""}`}
+                    onClick={() => setPosing((v) => !v)}
+                    title={posing ? "Stop the pose test" : "Pose test: sway every bone to check the skin weights"}
+                  >
+                    <PersonStanding size={16} />
+                  </button>
+                </>
+              )}
             </div>
           </div>
         ) : asset.kind === "multiview" && asset.views ? (
@@ -156,7 +188,7 @@ export function Viewer(props: Props) {
         )}
         <p className="toolbar-prompt" title={asset.prompt}>
           {asset.kind === "model3d"
-            ? `${asset.params.textured ? "Textured model" : asset.params.remeshed ? "Remeshed model" : "3D model"} · ${asset.params.faces?.toLocaleString() ?? "?"} faces`
+            ? `${modelLabel(asset.params)} · ${asset.params.faces?.toLocaleString() ?? "?"} faces`
             : asset.prompt || (asset.kind === "multiview" ? "Multiview from image" : "")}
         </p>
         <div className="toolbar-actions">
@@ -188,6 +220,11 @@ export function Viewer(props: Props) {
               <PaintBucket size={15} /> Texture
             </button>
           )}
+          {asset.kind === "model3d" && (
+            <button className="tool-btn" onClick={() => onRig(asset)} title="Add a skeleton and skin weights (SkinTokens)">
+              <Bone size={15} /> Rig
+            </button>
+          )}
           {asset.kind !== "model3d" && (
             <button className="tool-btn" onClick={() => onReuse(asset)} title="Load these settings into the panel">
               <RotateCcw size={15} /> Reuse
@@ -195,7 +232,7 @@ export function Viewer(props: Props) {
           )}
           {asset.kind === "model3d" && asset.model_urls ? (
             <>
-              <a className="tool-btn" href={asset.model_urls.glb} download title={asset.params.textured ? "Download GLB (textured)" : "Download GLB (vertex colours)"}>
+              <a className="tool-btn" href={asset.model_urls.glb} download title={`Download GLB (${asset.params.textured ? "textured" : "vertex colours"}${asset.params.rigged ? ", rigged" : ""})`}>
                 <Download size={15} /> GLB
               </a>
               {asset.params.textured ? (

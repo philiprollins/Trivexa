@@ -64,7 +64,14 @@ export interface Model3DParams {
   use_image?: boolean; // remesh guided by a reference image (DINOv3)
   detail?: RemeshDetail;
   guidance?: number;
+  rigged?: boolean; // SkinTokens output: the GLB carries a skeleton and skin weights
+  bones?: number;
+  style?: RigStyle;
+  beams?: number;
+  temperature?: number;
 }
+
+export type RigStyle = "auto" | "humanoid";
 
 export type RemeshDetail = "low" | "normal" | "high" | "max";
 
@@ -96,7 +103,7 @@ export type JobStatus = "queued" | "loading" | "running" | "done" | "error" | "c
 
 export interface Job {
   id: string;
-  kind: "image" | "multiview" | "model3d" | "texture" | "remesh";
+  kind: "image" | "multiview" | "model3d" | "texture" | "remesh" | "rig";
   params: ImageParams & Partial<MultiviewParams> & Partial<Model3DParams>;
   status: JobStatus;
   step: number;
@@ -162,7 +169,7 @@ export const api = {
     request<{
       checkpoints: Checkpoint[];
       multiview: MultiviewSupport;
-      model3d: { triposr: boolean; meshflow: boolean; meshflow_image: boolean };
+      model3d: { triposr: boolean; meshflow: boolean; meshflow_image: boolean; skintokens: boolean };
       texture: TextureBaker;
     }>("/api/models"),
   samplers: () => request<{ samplers: Sampler[] }>("/api/samplers"),
@@ -208,6 +215,8 @@ export const api = {
     guidance: number;
   }) =>
     request<{ jobs: Job[] }>("/api/generate/remesh", { method: "POST", body: JSON.stringify(params) }),
+  generateRig: (params: { source_asset: string; style: RigStyle; seed: number; count: number; beams: number; temperature: number }) =>
+    request<{ jobs: Job[] }>("/api/generate/rig", { method: "POST", body: JSON.stringify(params) }),
   setThumbnail: (id: string, image: string) =>
     request<Asset>(`/api/assets/${id}/thumbnail`, { method: "POST", body: JSON.stringify({ image }) }),
   cancelJob: (id: string) => request(`/api/jobs/${id}/cancel`, { method: "POST" }),

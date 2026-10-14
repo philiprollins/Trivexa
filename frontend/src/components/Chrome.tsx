@@ -1,10 +1,10 @@
-import { Box, Cpu, Image as ImageIcon, Layers, PaintBucket, Power, Pyramid } from "lucide-react";
+import { Bone, Box, Cpu, Image as ImageIcon, Layers, PaintBucket, Power, Pyramid } from "lucide-react";
 import type { Status } from "../api";
 import { Logo } from "./Logo";
 
 const GB = 1024 ** 3;
 
-export type Tool = "image" | "multiview" | "model3d" | "remesh" | "texture";
+export type Tool = "image" | "multiview" | "model3d" | "remesh" | "texture" | "rig";
 
 export function TopBar(props: { tool: Tool; status: Status | null; connected: boolean; onUnload: () => void }) {
   const { status, connected, onUnload } = props;
@@ -44,6 +44,7 @@ const TOOLS = [
   { id: "model3d", label: "3D Model", icon: Box, enabled: true },
   { id: "remesh", label: "Remesh", icon: Pyramid, enabled: true },
   { id: "texture", label: "Texture", icon: PaintBucket, enabled: true },
+  { id: "rig", label: "Rig", icon: Bone, enabled: true },
 ];
 
 export function Rail({ active, onSelect }: { active: Tool; onSelect: (t: Tool) => void }) {
