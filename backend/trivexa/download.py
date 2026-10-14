@@ -1,7 +1,7 @@
 """Download model weights Trivexa needs beyond the shared models folder.
 
     uv run python -m trivexa.download             # everything
-    uv run python -m trivexa.download ig2mv lama  # specific items (see ITEMS)
+    uv run python -m trivexa.download ig2mv lama  # specific items (see ITEMS; an item may be several files)
 
 Downloads resume if interrupted and are checked against a known SHA-256.
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
 
-from .config import MESHFLOW_DIR, MV_ADAPTER_DIR, SKINTOKENS_DIR, TEXTURE_WEIGHTS_DIR
+from .config import MESHFLOW_DIR, MV_ADAPTER_DIR, SKINTOKENS_DIR, TEXTURE_WEIGHTS_DIR, TRIPOSG_DIR
 
 MV_ADAPTER_REPO = "huanngzh/mv-adapter"
 MV_ADAPTER_REVISION = "6de4033df6b53366f3c009d22f5ec434bb55e59f"
@@ -23,6 +23,8 @@ MESHFLOW_REPO = "facebook/meshflow"
 MESHFLOW_REVISION = "9249a90e4997e105e533d6f502453fa3b344676f"
 SKINTOKENS_REPO = "VAST-AI/SkinTokens"
 SKINTOKENS_REVISION = "79736cad0fd84de384d5eede659b4ebd24effe33"
+TRIPOSG_REPO = "VAST-AI/TripoSG"
+TRIPOSG_REVISION = "2c1c516d22d58db486a058d98d31bb6177344e06"
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,34 @@ ITEMS = {
         "experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt",
         SKINTOKENS_DIR,
     ),
+    # Image -> 3D (MIT). The repo's diffusers layout is kept under data/models/triposg/; engines/triposg.py builds
+    # the models itself, so model_index.json and the scheduler/preprocessor configs are not needed.
+    "triposg": (
+        HubFile(TRIPOSG_REPO, TRIPOSG_REVISION, "transformer/diffusion_pytorch_model.safetensors", TRIPOSG_DIR),
+        HubFile(
+            TRIPOSG_REPO,
+            TRIPOSG_REVISION,
+            "transformer/config.json",
+            TRIPOSG_DIR,
+            "54ad779e68f9bc7303122cdf291f6db48dec7c67e41d28c05ac359daf914128a",
+        ),
+        HubFile(TRIPOSG_REPO, TRIPOSG_REVISION, "vae/diffusion_pytorch_model.safetensors", TRIPOSG_DIR),
+        HubFile(
+            TRIPOSG_REPO,
+            TRIPOSG_REVISION,
+            "vae/config.json",
+            TRIPOSG_DIR,
+            "2fb6ba9b364d42c9681879dca0f7edcb978f2db974a1ca4b15d28f9b15a5baed",
+        ),
+        HubFile(TRIPOSG_REPO, TRIPOSG_REVISION, "image_encoder_dinov2/model.safetensors", TRIPOSG_DIR),
+        HubFile(
+            TRIPOSG_REPO,
+            TRIPOSG_REVISION,
+            "image_encoder_dinov2/config.json",
+            TRIPOSG_DIR,
+            "8ed81b0d5ffd2c8b2cecd7dc1326d3eefa409bc9d525537b6b2a3c70a992fd02",
+        ),
+    ),
 }
 
 
@@ -108,7 +138,11 @@ def _download_url(item: UrlFile, target: Path) -> None:
 
 
 def fetch(name: str) -> None:
-    item = ITEMS[name]
+    for item in ITEMS[name] if isinstance(ITEMS[name], tuple) else (ITEMS[name],):
+        _fetch_file(name, item)
+
+
+def _fetch_file(name: str, item: HubFile | UrlFile) -> None:
     target = item.dest / item.filename
     expected = _expected_sha256(item)
     if target.is_file() and _sha256(target) == expected:

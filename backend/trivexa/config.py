@@ -19,6 +19,7 @@ MV_ADAPTER_DIR = DATA_DIR / "models" / "mv-adapter"
 TEXTURE_WEIGHTS_DIR = DATA_DIR / "models" / "texture"  # RealESRGAN + LaMa for the upstream texture baker
 MESHFLOW_DIR = DATA_DIR / "models" / "meshflow"  # config.yaml + model.pth (facebook/meshflow)
 SKINTOKENS_DIR = DATA_DIR / "models" / "skintokens"  # experiments/*/…ckpt (VAST-AI/SkinTokens)
+TRIPOSG_DIR = DATA_DIR / "models" / "triposg"  # transformer/, vae/, image_encoder_dinov2/ (VAST-AI/TripoSG)
 
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 
