@@ -14,7 +14,7 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
 
-from .config import MESHFLOW_DIR, MV_ADAPTER_DIR, SKINTOKENS_DIR, TEXTURE_WEIGHTS_DIR, TRIPOSG_DIR
+from .config import MESHFLOW_DIR, MV_ADAPTER_DIR, SKINTOKENS_DIR, TEXTURE_WEIGHTS_DIR, TRIPOSG_DIR, UNIMATE_DIR
 
 MV_ADAPTER_REPO = "huanngzh/mv-adapter"
 MV_ADAPTER_REVISION = "6de4033df6b53366f3c009d22f5ec434bb55e59f"
@@ -25,6 +25,8 @@ SKINTOKENS_REPO = "VAST-AI/SkinTokens"
 SKINTOKENS_REVISION = "79736cad0fd84de384d5eede659b4ebd24effe33"
 TRIPOSG_REPO = "VAST-AI/TripoSG"
 TRIPOSG_REVISION = "2c1c516d22d58db486a058d98d31bb6177344e06"
+UNIMATE_REPO = "Linzhan/UniMate"
+UNIMATE_REVISION = "174fc755ec248d0c98f27759b7a95648e7f05905"
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,19 @@ ITEMS = {
             "image_encoder_dinov2/config.json",
             TRIPOSG_DIR,
             "8ed81b0d5ffd2c8b2cecd7dc1326d3eefa409bc9d525537b6b2a3c70a992fd02",
+        ),
+    ),
+    # Text -> motion on any skeleton (checkpoints CC BY-NC 4.0). The recommended UniML3D run, final step; its
+    # flan-t5-base text encoder is not part of this item yet.
+    "unimate": (
+        HubFile(UNIMATE_REPO, UNIMATE_REVISION, "unimate_uniml3d_f60_v3/checkpoints/checkpoint_step_150000.pt", UNIMATE_DIR),
+        HubFile(UNIMATE_REPO, UNIMATE_REVISION, "unimate_uniml3d_f60_v3/dataset_stats.npy", UNIMATE_DIR),
+        HubFile(
+            UNIMATE_REPO,
+            UNIMATE_REVISION,
+            "unimate_uniml3d_f60_v3/config.json",
+            UNIMATE_DIR,
+            "1ffbd379d3667de7d701ed6f3418f1c9d1a66f35d2653776255008c07c051aaa",
         ),
     ),
 }
