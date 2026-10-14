@@ -1840,6 +1840,7 @@ dependencies = [
     { name = "opencv-python-headless" },
     { name = "pillow" },
     { name = "pymcubes" },
+    { name = "pymeshlab" },
     { name = "safetensors" },
     { name = "timm" },
     { name = "torch" },
@@ -1856,7 +1857,6 @@ texture = [
     { name = "gltflib" },
     { name = "nvdiffrast" },
     { name = "open3d" },
-    { name = "pymeshlab" },
     { name = "spandrel" },
 ]
 
@@ -1876,7 +1876,7 @@ requires-dist = [
     { name = "opencv-python-headless", specifier = ">=5.0.0.93" },
     { name = "pillow", specifier = ">=11" },
     { name = "pymcubes", specifier = ">=0.1.6" },
-    { name = "pymeshlab", marker = "extra == 'texture'", specifier = ">=2023.12" },
+    { name = "pymeshlab", specifier = ">=2023.12" },
     { name = "safetensors", specifier = ">=0.4" },
     { name = "spandrel", marker = "extra == 'texture'", specifier = ">=0.4" },
     { name = "timm", specifier = ">=1.0.30" },

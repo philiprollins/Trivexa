@@ -22,6 +22,7 @@ dependencies = [
     "moderngl>=5.13.0",
     "xatlas>=0.0.11",
     "opencv-python-headless>=5.0.0.93",
+    "pymeshlab>=2023.12",  # TripoSG face limit; also the texture baker
 ]
 
 [project.optional-dependencies]
@@ -30,7 +31,6 @@ dependencies = [
 texture = [
     "nvdiffrast",
     "open3d>=0.19",
-    "pymeshlab>=2023.12",
     "spandrel>=0.4",
     "gltflib>=1.0",
     "cvcuda-cu13>=0.18",
