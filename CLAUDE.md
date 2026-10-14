@@ -18,7 +18,7 @@ files* from `~/ComfyUI/models` (`TRIVEXA_MODELS_DIR`). Reading ComfyUI source fo
 cd backend && .venv/bin/uvicorn trivexa.main:app --reload --port 8000   # backend dev
 cd frontend && npm run dev                  # UI dev on :5173, proxies /api (incl. websocket) and /files to :8000
 cd frontend && npm run build                # type-check (tsc -b) + build; the server serves frontend/dist
-cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama]  # resumable, SHA-256 checked
+cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config]  # resumable, SHA-256 checked
 cd backend && uv sync --extra texture       # compiles nvdiffrast; needs CUDA_HOME=/usr/local/cuda on PATH
 ```
 
@@ -50,6 +50,7 @@ Downloaded by Trivexa into `data/models/` (via `trivexa.download`):
 | Multiview | MV-Adapter SDXL `t2mv` (text) and `i2mv` (image) |
 | Texture | MV-Adapter SDXL `ig2mv` (image + geometry) and `tg2mv` (prompt + geometry) |
 | Upstream texture baker | `RealESRGAN_x2plus.pth`, `big-lama.pt` |
+| Remesh | MeshFlow `meshflow/config.yaml` + `model.pth` (gated `facebook/meshflow`, FAIR noncommercial, outputs too) |
 
 Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_models/trellis_2_*`, `vae/trellis_2_*`,
 `microsoft/TRELLIS.2-4B`) and Pixal3D. SD 2.x / MV-Adapter SD2.1 variants are deliberately not supported.
@@ -57,14 +58,15 @@ Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_mo
 ## Built so far
 
 Image tool (SDXL + SD 1.5, long-prompt chunking, live x0 previews, cancel) → Multiview tool (MV-Adapter t2mv/i2mv,
-6 views at 768 px) → 3D Model tool (TripoSR, orbit viewer with colour/clay/wire, GLB/OBJ) → Texture tool (ig2mv or tg2mv
+6 views at 768 px) → 3D Model tool (TripoSR, orbit viewer with colour/clay/wire, GLB/OBJ) → Remesh tool (MeshFlow,
+dense mesh → ~1k-face artist-style mesh, colours transferred as vertex colours) → Texture tool (ig2mv or tg2mv
 views baked into a UV texture by MV-Adapter's own pipeline, with Trivexa's lean baker as a fallback). Gallery, favorites,
-"Reuse" settings, and per-asset actions chain the tools (image → Multiview / 3D, multiview set → 3D, model → Texture).
+"Reuse" settings, and per-asset actions chain the tools (image → Multiview / 3D, multiview set → 3D, model → Remesh / Texture).
 A side-by-side baker benchmark is in `data/benchmarks/texture-2026-10-12/`.
 
 ## Architecture
 
-**Request flow.** Each `POST /api/generate/{image,multiview,3d,texture}` in `main.py` validates input, resolves model
+**Request flow.** Each `POST /api/generate/{image,multiview,3d,remesh,texture}` in `main.py` validates input, resolves model
 files (`models.resolve_checkpoint` only accepts ids from the on-disk listing), builds a `params` dict and submits one
 `Job` per output with a `run` closure. `JobManager` (`jobs.py`) runs jobs one at a time on a worker thread under a GPU
 lock and pushes `jobs` / `job` / `progress` (with preview data URLs) events over `/api/ws`. The closure calls an engine,
@@ -85,6 +87,10 @@ anything else resident.
 - `multiview.py` — MV-Adapter modes `t2mv`/`i2mv` (Plücker camera conditioning) and `ig2mv`/`tg2mv`
   (caller-supplied position+normal maps, row+column attention). Uses MV-Adapter's shifted-SNR scheduler around any sampler.
 - `bg_removal.py` (BiRefNet, kept in RAM, moved to GPU only while running), `triposr.py` (image → vertex-coloured mesh).
+- `meshflow.py` — MeshFlow DiT + MeshVAE decoder (geometry-only: zero visual condition, no CFG; the DINOv3 image
+  encoder is gated and not wired up). ~4.2 GB resident, ~6.3 GB peak, ~5 s. Output is in the source's frame but is
+  **non-manifold** in places (every 3-clique of the predicted edge graph becomes a triangle), which crashes UVAtlas:
+  `texture_upstream` detaches faces on non-manifold edges before unwrapping.
 - `texture.py` — renders the ig2mv condition maps with headless OpenGL (moderngl/EGL) using MV-Adapter's own camera
   matrices, plus the **lean** baker (xatlas + projection, unseen texels keep vertex colours).
 - `texture_upstream.py` — wraps the vendored MV-Adapter `TexturePipeline` (UVAtlas, RealESRGAN ×2, LaMa view
@@ -92,7 +98,8 @@ anything else resident.
   if its packages or weights are missing.
 
 **Mesh conventions.** Meshes are Y-up and face +Z (glTF front). TripoSR output is rotated 180° to satisfy this and
-records `params.front = "+z"`; older models lack it and face −Z. The texture tool's `front_yaw` turns the mesh in the
+records `params.front = "+z"`; older models lack it and face −Z (remeshing turns those to +Z). `params.engine` chains
+the steps, e.g. `triposr + meshflow + mv-adapter`; remeshes also set `params.remeshed`. The texture tool's `front_yaw` turns the mesh in the
 lean path and is folded into the camera azimuths in the upstream path.
 
 **Storage** (`store.py`). One SQLite table `assets` with `kind` = `image` | `multiview` | `model3d` (textured models
@@ -101,7 +108,7 @@ references, model files, extra images). Multiview sets and 3D models each get a 
 delete removes the folder. The schema migrates in place (`ALTER TABLE` when a column is missing). 3D thumbnails start as
 the input image and are replaced by a render the browser uploads the first time the model is opened.
 
-**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet and TripoSR inference code is
+**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR and MeshFlow inference code is
 copied at pinned commits instead of pip-installed, to avoid their heavy unrelated dependencies and
 `trust_remote_code`. Local edits are marked `# Trivexa:`. `mvadapter/utils/mesh_utils/__init__.py` is intentionally
 empty so the camera helpers import without nvdiffrast/Triton/CV-CUDA. nvdiffrast is non-commercial licensed.

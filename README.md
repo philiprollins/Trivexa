@@ -12,6 +12,11 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
   (~2 s per mesh, vertex colours) from an upload, a gallery image or any view of a multiview set. Models open
   in an orbit viewer (colour / clay / wireframe) and download as GLB or OBJ. Rough, but fine for prototypes
   and small props.
+- **Remesh**: rebuilds a 3D model as a clean, artist-style low-poly mesh (~0.5–2k faces instead of TripoSR's
+  ~80k) with [MeshFlow](https://github.com/facebookresearch/meshflow), ~5 s per variation. Colours carry over as
+  vertex colours; texture the result afterwards. Each seed gives a different topology, so it can make up to 8
+  variations at once. Shapes are smoothed and very thin parts can disappear. MeshFlow is under the FAIR
+  Noncommercial Research License, which also covers its outputs.
 - **Texture**: gives a 3D model a proper UV texture from a reference image (by default the image it was made from)
   or from a prompt alone: MV-Adapter's geometry-guided `ig2mv` (image) or `tg2mv` (prompt) generates six views
   (incl. top/bottom) conditioned on the mesh's position and normal maps, which are baked into a 1K–4K texture (~75 s). Output: textured GLB, OBJ zip (OBJ + MTL + PNG)
@@ -37,6 +42,8 @@ cd backend && uv run python -m trivexa.download        # or: ... download t2mv i
 
 Files are pinned to a specific revision and checked against their published SHA-256. `esrgan` and `lama`
 (RealESRGAN x2 and LaMa, 261 MB) are the upstream texture baker's view upscaler and inpainter.
+`meshflow` and `meshflow-config` (4.5 GB) are Remesh's weights; the Hugging Face repo is gated, so accept its
+license on huggingface.co/facebook/meshflow and `hf auth login` first.
 
 ### Settings
 
@@ -66,7 +73,7 @@ cd frontend && npm run dev     # → http://localhost:5173 (proxies /api and /fi
 | Generated images | `data/outputs/images/YYYY-MM-DD/*.png` (settings embedded as PNG text chunks) |
 | Multi-view sets | `data/outputs/multiview/YYYY-MM-DD/<id>/` (`view_000.png` … `view_315.png`, `grid.png`, `reference.png`) |
 | 3D models | `data/outputs/models3d/YYYY-MM-DD/<id>/` (`model.glb`, `model.obj`, `input.png`; textured models also `material.mtl`, `texture.png`, `views.png`) |
-| Downloaded weights | `data/models/` (MV-Adapter) |
+| Downloaded weights | `data/models/` (MV-Adapter, texture baker, MeshFlow) |
 | Thumbnails | `data/outputs/thumbs/` |
 | Asset database | `data/trivexa.db` (SQLite) |
 | Model configs/tokenizers | `data/hf-configs/` (fetched once per architecture on first load, a few MB, no weights) |
@@ -85,10 +92,11 @@ backend/trivexa/
   engines/multiview.py  MV-Adapter text/image-to-multiview on an SDXL checkpoint
   engines/bg_removal.py BiRefNet foreground extraction
   engines/triposr.py    TripoSR image-to-mesh
+  engines/meshflow.py   MeshFlow remeshing (dense mesh -> artist-style low-poly mesh)
   engines/texture.py    ig2mv condition maps (headless OpenGL via moderngl/EGL) + the lean baker (xatlas, projection)
   engines/texture_upstream.py  MV-Adapter's texture pipeline (vendored) as the default baker
   download.py      resumable, checksum-verified weight downloads
-  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR); see vendor/README.md
+  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR, MeshFlow); see vendor/README.md
 frontend/src/      React UI (Vite)
 ```
 
@@ -104,7 +112,7 @@ frontend/src/      React UI (Vite)
   and default to a half turn.
 - Prompts longer than 77 tokens are encoded in chunks rather than truncated. `(word:1.2)` weighting syntax is not parsed yet.
 - The SDXL VAE decodes in bf16 to avoid the fp16 NaN issue without the fp32 memory spike.
-- Only one large pipeline (image, multiview or 3D) is on the GPU at a time; switching tools reloads
-  (~8 s for MV-Adapter, ~3 s for TripoSR).
+- Only one large pipeline (image, multiview, 3D or remesh) is on the GPU at a time; switching tools reloads
+  (~8 s for MV-Adapter, ~3 s for TripoSR, ~5 s for MeshFlow, which peaks ~6.3 GB).
   Image-to-multiview peaks around 14.4 GB of VRAM (the text encoders are parked in system RAM while it denoises),
   so it is tight on a 16 GB card if anything else is using the GPU.
