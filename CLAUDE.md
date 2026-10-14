@@ -48,7 +48,7 @@ Downloaded by Trivexa into `data/models/` (via `trivexa.download`):
 | Use | Model |
 |---|---|
 | Multiview | MV-Adapter SDXL `t2mv` (text) and `i2mv` (image) |
-| Texture | MV-Adapter SDXL `ig2mv` (image + geometry). `tg2mv` (prompt + geometry) is downloaded but **not wired up yet** |
+| Texture | MV-Adapter SDXL `ig2mv` (image + geometry) and `tg2mv` (prompt + geometry) |
 | Upstream texture baker | `RealESRGAN_x2plus.pth`, `big-lama.pt` |
 
 Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_models/trellis_2_*`, `vae/trellis_2_*`,
@@ -57,8 +57,8 @@ Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_mo
 ## Built so far
 
 Image tool (SDXL + SD 1.5, long-prompt chunking, live x0 previews, cancel) → Multiview tool (MV-Adapter t2mv/i2mv,
-6 views at 768 px) → 3D Model tool (TripoSR, orbit viewer with colour/clay/wire, GLB/OBJ) → Texture tool (ig2mv views
-baked into a UV texture by MV-Adapter's own pipeline, with Trivexa's lean baker as a fallback). Gallery, favorites,
+6 views at 768 px) → 3D Model tool (TripoSR, orbit viewer with colour/clay/wire, GLB/OBJ) → Texture tool (ig2mv or tg2mv
+views baked into a UV texture by MV-Adapter's own pipeline, with Trivexa's lean baker as a fallback). Gallery, favorites,
 "Reuse" settings, and per-asset actions chain the tools (image → Multiview / 3D, multiview set → 3D, model → Texture).
 A side-by-side baker benchmark is in `data/benchmarks/texture-2026-10-12/`.
 
@@ -82,8 +82,8 @@ anything else resident.
   `local_files_only=True`. Shared helpers used by other engines: `SAMPLERS`, `make_step_callback` (cancel + x0
   previews, optionally tiled as a grid), `decode_latents` (VAE in bf16, one latent at a time — avoids fp16 NaNs and
   the fp32 spike).
-- `multiview.py` — MV-Adapter modes `t2mv`/`i2mv` (Plücker camera conditioning) and `ig2mv` (caller-supplied
-  position+normal maps, row+column attention). Uses MV-Adapter's shifted-SNR scheduler around any sampler.
+- `multiview.py` — MV-Adapter modes `t2mv`/`i2mv` (Plücker camera conditioning) and `ig2mv`/`tg2mv`
+  (caller-supplied position+normal maps, row+column attention). Uses MV-Adapter's shifted-SNR scheduler around any sampler.
 - `bg_removal.py` (BiRefNet, kept in RAM, moved to GPU only while running), `triposr.py` (image → vertex-coloured mesh).
 - `texture.py` — renders the ig2mv condition maps with headless OpenGL (moderngl/EGL) using MV-Adapter's own camera
   matrices, plus the **lean** baker (xatlas + projection, unseen texels keep vertex colours).

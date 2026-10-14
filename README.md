@@ -12,9 +12,9 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
   (~2 s per mesh, vertex colours) from an upload, a gallery image or any view of a multiview set. Models open
   in an orbit viewer (colour / clay / wireframe) and download as GLB or OBJ. Rough, but fine for prototypes
   and small props.
-- **Texture**: gives a 3D model a proper UV texture from a reference image (by default the image it was made from):
-  MV-Adapter's geometry-guided `ig2mv` generates six views (incl. top/bottom) conditioned on the mesh's position
-  and normal maps, which are baked into a 1K–4K texture (~75 s). Output: textured GLB, OBJ zip (OBJ + MTL + PNG)
+- **Texture**: gives a 3D model a proper UV texture from a reference image (by default the image it was made from)
+  or from a prompt alone: MV-Adapter's geometry-guided `ig2mv` (image) or `tg2mv` (prompt) generates six views
+  (incl. top/bottom) conditioned on the mesh's position and normal maps, which are baked into a 1K–4K texture (~75 s). Output: textured GLB, OBJ zip (OBJ + MTL + PNG)
   and the texture PNG. Two bakers, chosen in `settings.toml`: MV-Adapter's own pipeline (default) or Trivexa's
   lean fallback — see below.
 
@@ -28,8 +28,8 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
 
 ### Extra weights
 
-Multiview needs the MV-Adapter SDXL weights (t2mv 1.96 GB, i2mv 3.6 GB) and Texture needs ig2mv (3.6 GB;
-tg2mv is optional, for prompt-only texturing later). Download or resume them with:
+Multiview needs the MV-Adapter SDXL weights (t2mv 1.96 GB, i2mv 3.6 GB) and Texture needs ig2mv (3.6 GB) for
+image-guided texturing and tg2mv (1.9 GB) for prompt-only texturing. Download or resume them with:
 
 ```bash
 cd backend && uv run python -m trivexa.download        # or: ... download t2mv i2mv ig2mv tg2mv
