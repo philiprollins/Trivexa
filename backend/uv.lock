@@ -1882,7 +1882,7 @@ requires-dist = [
     { name = "timm", specifier = ">=1.0.30" },
     { name = "torch", specifier = ">=2.8", index = "https://download.pytorch.org/whl/cu130" },
     { name = "torchvision", specifier = ">=0.29.1", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "transformers", specifier = ">=4.50" },
+    { name = "transformers", specifier = ">=4.51" },
     { name = "trimesh", specifier = ">=5.1.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
     { name = "xatlas", specifier = ">=0.0.11" },
