@@ -48,6 +48,15 @@ HOLOPART_REVISION = "29cdb1417121842c4c4d59b9d283cc734f8c3aec"
 KIMODO_REPO = "nvidia/Kimodo-SOMA-RP-v1.1"
 KIMODO_REVISION = "6c9233af1180b8151e3c4703477104af5dce9dd5"
 KIMODO_SOMA_DIR = KIMODO_DIR / "Kimodo-SOMA-RP-v1.1"
+KIMODO_TEXT_DIR = KIMODO_DIR / "text-encoder"
+LLAMA3_REPO = "meta-llama/Meta-Llama-3-8B-Instruct"  # gated: request access on the model page first
+LLAMA3_REVISION = "8afb486c1db24fe5011ec46dfbe5b5dccdb575c2"
+LLM2VEC_REPO = "McGill-NLP/LLM2Vec-Meta-Llama-3-8B-Instruct-mntp"
+LLM2VEC_REVISION = "31474e395ada192e8ed1586db6be79fb3b70c9c0"
+LLM2VEC_SUPERVISED_REPO = "McGill-NLP/LLM2Vec-Meta-Llama-3-8B-Instruct-mntp-supervised"
+LLM2VEC_SUPERVISED_REVISION = "baa8ebf04a1c2500e61288e7dad65e8ae42601a7"
+FLAN_T5_REPO = "google/flan-t5-base"
+FLAN_T5_REVISION = "7bcac572ce56db69c1ea7c8af255c5d7c9672fc2"
 
 
 @dataclass(frozen=True)
@@ -56,7 +65,7 @@ class HubFile:
     revision: str
     filename: str  # path in the repo; lands at dest/filename
     dest: Path
-    sha256: str | None = None  # None: use the Hub's LFS metadata (small non-LFS files need it spelled out)
+    sha256: str | None = None  # None: the Hub's LFS SHA-256, or the git blob id of a small non-LFS file
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,10 @@ class UrlFile:
     sha256: str
     filename: str
     dest: Path
+
+def _hub_files(repo: str, revision: str, dest: Path, *filenames: str) -> tuple[HubFile, ...]:
+    return tuple(HubFile(repo, revision, f, dest) for f in filenames)
+
 
 # Kimodo's normalisation stats: small non-LFS files, so their checksums are spelled out.
 KIMODO_STATS = tuple(
@@ -144,8 +157,8 @@ ITEMS = {
             "8ed81b0d5ffd2c8b2cecd7dc1326d3eefa409bc9d525537b6b2a3c70a992fd02",
         ),
     ),
-    # Text -> motion on any skeleton (checkpoints CC BY-NC 4.0). The recommended UniML3D run, final step; its
-    # flan-t5-base text encoder is not part of this item yet.
+    # Text -> motion on any skeleton (checkpoints CC BY-NC 4.0). The recommended UniML3D run, final step, and its
+    # frozen flan-t5-base text encoder (Apache-2.0; read with T5Tokenizer + T5EncoderModel).
     "unimate": (
         HubFile(UNIMATE_REPO, UNIMATE_REVISION, "unimate_uniml3d_f60_v3/checkpoints/checkpoint_step_150000.pt", UNIMATE_DIR),
         HubFile(UNIMATE_REPO, UNIMATE_REVISION, "unimate_uniml3d_f60_v3/dataset_stats.npy", UNIMATE_DIR),
@@ -156,9 +169,20 @@ ITEMS = {
             UNIMATE_DIR,
             "1ffbd379d3667de7d701ed6f3418f1c9d1a66f35d2653776255008c07c051aaa",
         ),
+        *_hub_files(
+            FLAN_T5_REPO,
+            FLAN_T5_REVISION,
+            UNIMATE_DIR / "flan-t5-base",
+            "config.json",
+            "model.safetensors",
+            "spiece.model",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+        ),
     ),
-    # Text -> motion on the SOMA human skeleton (NVIDIA Open Model License, commercial use allowed). The LLM2Vec
-    # text encoder is not part of this item yet.
+    # Text -> motion on the SOMA human skeleton (NVIDIA Open Model License, commercial use allowed); its text encoder
+    # is the separate "kimodo-text" item.
     "kimodo": (
         HubFile(KIMODO_REPO, KIMODO_REVISION, "model.safetensors", KIMODO_SOMA_DIR),
         HubFile(
@@ -169,6 +193,40 @@ ITEMS = {
             "905664ad05779b0e28c391b85dc81c9de166418bd5f471ef605f75ab746ce391",
         ),
         *KIMODO_STATS,
+    ),
+    # Kimodo's text encoder, LLM2Vec (MIT): Llama-3-8B-Instruct (Llama 3 Community License, gated; ~16 GB bf16) made
+    # bidirectional, with LLM2Vec's MNTP LoRA merged in and its supervised LoRA on top. The ungated adapters come first.
+    "kimodo-text": (
+        *_hub_files(
+            LLM2VEC_REPO,
+            LLM2VEC_REVISION,
+            KIMODO_TEXT_DIR / "LLM2Vec-Meta-Llama-3-8B-Instruct-mntp",
+            "config.json",
+            "adapter_config.json",
+            "adapter_model.safetensors",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+        ),
+        *_hub_files(
+            LLM2VEC_SUPERVISED_REPO,
+            LLM2VEC_SUPERVISED_REVISION,
+            KIMODO_TEXT_DIR / "LLM2Vec-Meta-Llama-3-8B-Instruct-mntp-supervised",
+            "adapter_config.json",
+            "adapter_model.safetensors",
+        ),
+        *_hub_files(
+            LLAMA3_REPO,
+            LLAMA3_REVISION,
+            KIMODO_TEXT_DIR / "Meta-Llama-3-8B-Instruct",
+            "config.json",
+            "generation_config.json",
+            "model.safetensors.index.json",
+            *(f"model-0000{i}-of-00004.safetensors" for i in range(1, 5)),
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+        ),
     ),
     # Mesh part segmentation, two alternatives. PartField (NVIDIA License: non-commercial) predicts a per-face
     # feature field that is clustered into any number of parts; the Objaverse-trained checkpoint is the only one
@@ -210,19 +268,26 @@ ITEMS = {
 }
 
 
-def _sha256(path) -> str:
-    h = hashlib.sha256()
+def _digest(path, algorithm: str) -> str:
+    """SHA-256 of the file, or for "git" its git blob id (SHA-1 over a "blob <size>\\0" header and the content)."""
+    if algorithm == "git":
+        h = hashlib.sha1(b"blob %d\0" % Path(path).stat().st_size)
+    else:
+        h = hashlib.sha256()
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(16 * 1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
 
 
-def _expected_sha256(item: HubFile | UrlFile) -> str:
+def _expected_digest(item: HubFile | UrlFile) -> tuple[str, str]:
+    """(algorithm, digest): a spelled-out SHA-256, the Hub's LFS SHA-256, or for a small non-LFS file the git
+    blob id the Hub lists (which it also does for gated repos one cannot download from yet)."""
     if item.sha256:
-        return item.sha256
+        return "sha256", item.sha256
     info = HfApi().model_info(item.repo, revision=item.revision, files_metadata=True)
-    return next(s.lfs.sha256 for s in info.siblings if s.rfilename == item.filename)
+    sibling = next(s for s in info.siblings if s.rfilename == item.filename)
+    return ("sha256", sibling.lfs.sha256) if sibling.lfs else ("git", sibling.blob_id)
 
 
 def _download_url(item: UrlFile, target: Path) -> None:
@@ -243,8 +308,8 @@ def fetch(name: str) -> None:
 
 def _fetch_file(name: str, item: HubFile | UrlFile) -> None:
     target = item.dest / item.filename
-    expected = _expected_sha256(item)
-    if target.is_file() and _sha256(target) == expected:
+    algorithm, expected = _expected_digest(item)
+    if target.is_file() and _digest(target, algorithm) == expected:
         print(f"{name}: already present and verified")
         return
     print(f"{name}: downloading {item.filename} → {item.dest}")
@@ -253,7 +318,7 @@ def _fetch_file(name: str, item: HubFile | UrlFile) -> None:
         hf_hub_download(item.repo, item.filename, revision=item.revision, local_dir=item.dest)
     else:
         _download_url(item, target)
-    actual = _sha256(target)
+    actual = _digest(target, algorithm)
     if actual != expected:
         target.unlink()
         sys.exit(f"{name}: checksum mismatch (got {actual}, expected {expected}); deleted, please retry")
