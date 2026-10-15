@@ -21,6 +21,10 @@ MESHFLOW_DIR = DATA_DIR / "models" / "meshflow"  # config.yaml + model.pth (face
 SKINTOKENS_DIR = DATA_DIR / "models" / "skintokens"  # experiments/*/…ckpt (VAST-AI/SkinTokens)
 UNIMATE_DIR = DATA_DIR / "models" / "unimate"  # unimate_uniml3d_f60_v3/ (Linzhan/UniMate, CC BY-NC 4.0)
 TRIPOSG_DIR = DATA_DIR / "models" / "triposg"  # transformer/, vae/, image_encoder_dinov2/ (VAST-AI/TripoSG)
+# Pixal3D (TencentARC/Pixal3D: pipeline.json + ckpts/) and the two models it borrows, all from the shared MODELS_DIR.
+PIXAL3D_DIR = MODELS_DIR / "TencentARC" / "Pixal3D"
+DINOV3_NAF_PATH = MODELS_DIR / "clip_vision" / "dino_v3_L_naf_fp32.safetensors"  # DINOv3 ViT-L/16 + NAF upsampler
+MOGE_PATH = MODELS_DIR / "geometry_estimation" / "moge_2_vitl_normal_fp16.safetensors"  # MoGe-2 ViT-L (camera FOV)
 
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 
