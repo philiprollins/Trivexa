@@ -18,7 +18,7 @@ files* from `~/ComfyUI/models` (`TRIVEXA_MODELS_DIR`). Reading ComfyUI source fo
 cd backend && .venv/bin/uvicorn trivexa.main:app --reload --port 8000   # backend dev
 cd frontend && npm run dev                  # UI dev on :5173, proxies /api (incl. websocket) and /files to :8000
 cd frontend && npm run build                # type-check (tsc -b) + build; the server serves frontend/dist
-cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config skintokens triposg partfield p3sam holopart]  # resumable, SHA-256 checked
+cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config skintokens triposg unimate kimodo kimodo-text partfield p3sam holopart]  # resumable, SHA-256 checked
 cd backend && uv sync --extra texture       # compiles nvdiffrast; needs CUDA_HOME=/usr/local/cuda on PATH
 CXX=$PWD/backend/tools/cxx20 NVCC_APPEND_FLAGS=-std=c++20 uv sync --extra texture --extra pixal3d  # as run.sh does
 ```
@@ -63,6 +63,8 @@ Downloaded by Trivexa into `data/models/` (via `trivexa.download`):
 | Rig | SkinTokens `skintokens/experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt` (VAST-AI, MIT; includes the skin VAE) |
 | Image → 3D | TripoSG `triposg/{transformer,vae,image_encoder_dinov2}/` (VAST-AI/TripoSG, MIT weights; ~7.9 GB, fp32 on disk) |
 | Segment | PartField `partfield/model_objaverse.ckpt` (NVIDIA License, non-commercial) |
+| Animate | UniMate `unimate/unimate_uniml3d_f60_v3/` (`checkpoints/checkpoint_step_150000.pt`, `config.json`, `dataset_stats.npy`; CC BY-NC 4.0) + `unimate/flan-t5-base/` |
+| Animate (not wired up yet) | Kimodo `kimodo/Kimodo-SOMA-RP-v1.1/` (NVIDIA Open Model License; SOMA human skeleton) + `kimodo/text-encoder/` (LLM2Vec: Llama-3-8B-Instruct from NousResearch's byte-identical mirror, checked against Meta's hashes, + McGill-NLP's two LoRAs) |
 | Segment (not wired up yet) | P3-SAM `p3sam/p3sam/p3sam.safetensors` (Hunyuan 3D-Part license, not EU/UK/KR; includes its fine-tuned Sonata backbone) |
 | Fill parts (not wired up yet) | HoloPart `holopart/{transformer,vae,part_encoder}/` (VAST-AI/HoloPart, MIT; ~3.8 GB; the VAE is TripoSG's in fp16) |
 
@@ -76,13 +78,14 @@ Image tool (SDXL + SD 1.5, long-prompt chunking, live x0 previews, cancel) → M
 model → N parts, one GLB node / OBJ object each, keeping colours or texture; the viewer's "Parts" mode colours them) → Remesh tool (MeshFlow,
 dense mesh → ~1k-face artist-style mesh, colours transferred as vertex colours) → Texture tool (ig2mv or tg2mv
 views baked into a UV texture by MV-Adapter's own pipeline, with Trivexa's lean baker as a fallback) → Rig tool (SkinTokens,
-skeleton + skin weights in a skinned GLB; the viewer shows bones and runs a pose test). Gallery, favorites,
-"Reuse" settings, and per-asset actions chain the tools (image → Multiview / 3D, multiview set → 3D, model → Segment / Remesh / Texture / Rig).
+skeleton + skin weights in a skinned GLB; the viewer shows bones and runs a pose test) → Animate tool (UniMate,
+prompt → 2 s of motion appended to the rigged GLB as a glTF animation; the viewer plays it, in place or travelling). Gallery, favorites,
+"Reuse" settings, and per-asset actions chain the tools (image → Multiview / 3D, multiview set → 3D, model → Segment / Remesh / Texture / Rig, rigged model → Animate).
 A side-by-side baker benchmark is in `data/benchmarks/texture-2026-10-12/`.
 
 ## Architecture
 
-**Request flow.** Each `POST /api/generate/{image,multiview,3d,segment,remesh,texture,rig}` in `main.py` validates input, resolves model
+**Request flow.** Each `POST /api/generate/{image,multiview,3d,segment,remesh,texture,rig,animate}` in `main.py` validates input, resolves model
 files (`models.resolve_checkpoint` only accepts ids from the on-disk listing), builds a `params` dict and submits one
 `Job` per output with a `run` closure. `JobManager` (`jobs.py`) runs jobs one at a time on a worker thread under a GPU
 lock and pushes `jobs` / `job` / `progress` (with preview data URLs) events over `/api/ws`. The closure calls an engine,
@@ -140,6 +143,20 @@ anything else resident.
   bones are always `bone_<i>`. Progress/cancel come from a `StoppingCriteria`. ~4 GB peak, ~4–6 s per rig once loaded.
   `gltf_skin.py` appends joints (translation-only nodes), inverse bind matrices and JOINTS_0/WEIGHTS_0 to trimesh's
   GLB export; `store.save_model3d(..., glb=...)` writes it (the OBJ stays unrigged). Rigs have `params.rigged`, `bones`.
+- `unimate.py` — UniMate: a 74M flow-matching transformer (graph attention, adaLN text) that animates any skeleton
+  of 2–71 joints. It is conditioned on the skeleton, not trained per rig: the rest pose canonicalised as upstream's
+  stage 4 does (BFS joint order, a "facing pair" turned to +Z, root XZ at the origin, leaf-to-leaf diameter 2,
+  grounded), graph distances / edge types / depths / Laplacian eigenvectors, and a flan-t5-base embedding of each
+  joint's *label* ("Left Thigh"). Labels and the facing pair come from upstream's offline rule annotator, run on a
+  temporary export NPZ; SkinTokens' `bone_<i>` rigs get geometric labels (hips, spine, limbs, fingers on humanoids;
+  facing comes out +Z), and with no pair the rest pose is taken to face +Z (Trivexa's convention). Captions are
+  sent as "An object <prompt>." (every training caption reads so). Sampling: dopri5 over the velocity field, CFG 3,
+  60 frames at 30 fps; ~15 s, <1 GB VRAM. Decoding inverts the canonical transform: with identity rest rotations,
+  the glTF rotation of every joint is q⁻¹·r·q (r the T-pose-relative rotation, q the facing turn), and the root
+  path maps back through scale/centre/ground. `params.motion_consistency` is the mean gap between the rotations'
+  FK and the joint positions the model also predicts (~0.01 of the diameter). `gltf_skin.add_animation` appends the
+  clip to the source GLB (the OBJ stays unanimated); `read_skeleton` reads a skin's joints back. Contact-heavy motions
+  can float (some jump seeds rise two body heights) or slide, as upstream warns.
 - `partfield.py` — PartField: a PVCNN point encoder (100k surface samples) + triplane transformer give 448-channel
   part features (fp16, ~1 s); each face averages a few dozen samples (`FACE_SAMPLE_BUDGET`). Faces are clustered as
   upstream does for meshes, Ward agglomerative under face adjacency, so each part is one connected region and the part
@@ -169,7 +186,7 @@ references, model files, extra images). Multiview sets and 3D models each get a 
 delete removes the folder. The schema migrates in place (`ALTER TABLE` when a column is missing). 3D thumbnails start as
 the input image and are replaced by a render the browser uploads the first time the model is opened.
 
-**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR, TripoSG, Pixal3D, NAF, MoGe, MeshFlow, DINOv3, SkinTokens and PartField inference code is
+**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR, TripoSG, Pixal3D, NAF, MoGe, MeshFlow, DINOv3, SkinTokens, PartField and UniMate inference code is
 copied at pinned commits instead of pip-installed, to avoid their heavy unrelated dependencies and
 `trust_remote_code`. Local edits are marked `# Trivexa:`. TripoSG's DiT is HunyuanDiT-derived (Tencent Hunyuan
 Community License: not licensed in the EU); its FlashVDM-licensed fast decoder is removed. NAF's NATTEN attention
@@ -185,7 +202,7 @@ Current pymeshlab renamed `Percentage` → `PercentageValue`.
 
 **Frontend** (`frontend/src`). `App.tsx` owns state: the active tool (rail), per-tool forms persisted in
 localStorage, assets, selection, and the job map from `useJobs` (websocket with auto-reconnect). Panels per tool
-(`ImagePanel`, `MultiviewPanel`, `Model3DPanel`, `SegmentPanel`, `RemeshPanel`, `TexturePanel`, `RigPanel`) share `controls.tsx`. `Viewer` renders images,
+(`ImagePanel`, `MultiviewPanel`, `Model3DPanel`, `SegmentPanel`, `RemeshPanel`, `TexturePanel`, `RigPanel`, `AnimatePanel`) share `controls.tsx`. `Viewer` renders images,
 3×2 multiview grids, pending jobs, and 3D models via `ModelViewer` (three.js, lazy-loaded). Plain CSS with tokens
 in `styles.css`; no CDN assets (the app must work offline).
 
