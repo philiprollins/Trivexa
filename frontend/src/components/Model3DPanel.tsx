@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import type { Asset } from "../api";
 import { SeedInput, Section, Segmented, Slider } from "./controls";
 
-export type Engine3D = "triposr" | "triposg";
+export type Engine3D = "triposr" | "triposg" | "pixal3d";
 
 export interface Model3DForm {
   engine: Engine3D;
@@ -16,8 +16,15 @@ export interface Model3DForm {
   faceLimit: number; // 0 = keep every face
   steps: number;
   guidance: number;
-  seed: number;
+  seed: number; // TripoSG and Pixal3D
   randomSeed: boolean;
+  // Pixal3D
+  p3dResolution: 1024 | 1536;
+  p3dFov: number; // degrees; 0 = estimate with MoGe-2
+  p3dTextureSize: 1024 | 2048 | 4096;
+  p3dFaceLimit: number;
+  p3dSteps: number;
+  p3dGuidance: number;
 }
 
 const FACE_LIMITS = [
@@ -25,6 +32,13 @@ const FACE_LIMITS = [
   { value: 200_000, label: "200k" },
   { value: 500_000, label: "500k" },
   { value: 0, label: "Full" },
+];
+
+const P3D_FACE_LIMITS = [
+  { value: 100_000, label: "100k" },
+  { value: 200_000, label: "200k" },
+  { value: 500_000, label: "500k" },
+  { value: 1_000_000, label: "1M" },
 ];
 
 export type Source3D =
@@ -38,6 +52,7 @@ interface Props {
   setSource: (s: Source3D | null) => void;
   selected: Asset | null; // image or multiview asset currently selected in the gallery
   available: Record<Engine3D, boolean>;
+  pixal3dNote: string | null; // why Pixal3D is unavailable
   bgAvailable: boolean;
   onGenerate: () => void;
   submitting: boolean;
@@ -58,6 +73,7 @@ export function Model3DPanel(p: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const sg = form.engine === "triposg";
+  const p3d = form.engine === "pixal3d";
   const canGenerate = p.available[form.engine] && source !== null && !(form.removeBg && !p.bgAvailable) && !p.submitting;
 
   const readFile = (file: File | undefined) => {
@@ -132,13 +148,14 @@ export function Model3DPanel(p: Props) {
                 </option>
               ))}
             </select>
-            <p className="hint">Both engines reconstruct from a single image; the front view usually works best.</p>
+            <p className="hint">Every engine reconstructs from a single image; the front view usually works best.</p>
           </Section>
         )}
 
         <Section label="Engine">
           <Segmented
             options={[
+              { value: "pixal3d", label: "Pixal3D" },
               { value: "triposg", label: "TripoSG" },
               { value: "triposr", label: "TripoSR" },
             ]}
@@ -146,7 +163,12 @@ export function Model3DPanel(p: Props) {
             onChange={(engine) => setForm({ engine })}
           />
           <div className="engine-card">
-            {sg ? (
+            {p3d ? (
+              <span>
+                Pixel-aligned shape and PBR texture in one pass (TRELLIS.2 backbone) · closest to the input image ·
+                textured GLB · ~1–2 min
+              </span>
+            ) : sg ? (
               <span>
                 High-fidelity shape from a 1.5B flow model · sharp detail and clean surfaces · no colour (texture it
                 next) · ~30–60 s
@@ -168,7 +190,69 @@ export function Model3DPanel(p: Props) {
           />
         </Section>
 
-        {sg ? (
+        {p3d ? (
+          <>
+            <Section label="Resolution">
+              <Segmented
+                options={[
+                  { value: 1024, label: "1024" },
+                  { value: 1536, label: "1536" },
+                ]}
+                value={form.p3dResolution}
+                onChange={(p3dResolution) => setForm({ p3dResolution })}
+              />
+              <p className="hint">Voxel grid of the final shape. 1536 is upstream's default; 1024 is quicker.</p>
+            </Section>
+
+            <Section label="Face limit">
+              <Segmented options={P3D_FACE_LIMITS} value={form.p3dFaceLimit} onChange={(p3dFaceLimit) => setForm({ p3dFaceLimit })} />
+            </Section>
+
+            <Section label="Texture size">
+              <Segmented
+                options={[1024, 2048, 4096].map((n) => ({ value: n as 1024 | 2048 | 4096, label: n }))}
+                value={form.p3dTextureSize}
+                onChange={(p3dTextureSize) => setForm({ p3dTextureSize })}
+              />
+            </Section>
+
+            <button className="collapse-head" onClick={() => setShowAdvanced((v) => !v)}>
+              Camera &amp; sampling
+              <ChevronDown size={16} className={showAdvanced ? "rot" : ""} />
+            </button>
+            {showAdvanced && (
+              <div className="advanced">
+                <Section label="Camera field of view">
+                  <Segmented
+                    options={[
+                      { value: "auto", label: "Estimate" },
+                      { value: "manual", label: "Set" },
+                    ]}
+                    value={form.p3dFov ? "manual" : "auto"}
+                    onChange={(v) => setForm({ p3dFov: v === "manual" ? 30 : 0 })}
+                  />
+                  {form.p3dFov > 0 && (
+                    <Slider label="FOV (°)" min={5} max={90} step={1} value={form.p3dFov} onChange={(p3dFov) => setForm({ p3dFov })} />
+                  )}
+                  <p className="hint">
+                    Pixal3D projects the image through the camera that took it. MoGe-2 estimates its FOV; set a narrow
+                    one (~12°) if the shape looks stretched in depth.
+                  </p>
+                </Section>
+                <Slider label="Steps" min={4} max={50} step={1} value={form.p3dSteps} onChange={(p3dSteps) => setForm({ p3dSteps })} />
+                <Slider
+                  label="Guidance"
+                  min={1}
+                  max={12}
+                  step={0.5}
+                  value={form.p3dGuidance}
+                  onChange={(p3dGuidance) => setForm({ p3dGuidance })}
+                />
+                <SeedInput seed={form.seed} random={form.randomSeed} onChange={(seed, randomSeed) => setForm({ seed, randomSeed })} />
+              </div>
+            )}
+          </>
+        ) : sg ? (
           <>
             <Section label="Mesh resolution">
               <Segmented
@@ -229,7 +313,13 @@ export function Model3DPanel(p: Props) {
         )}
 
         {!p.available[form.engine] &&
-          (sg ? (
+          (p3d ? (
+            <p className="notice">
+              Pixal3D unavailable: {p.pixal3dNote ?? "unknown reason"}. It reads <code>TencentARC/Pixal3D</code>,{" "}
+              <code>clip_vision/dino_v3_L_naf_fp32.safetensors</code> and{" "}
+              <code>geometry_estimation/moge_2_vitl_normal_fp16.safetensors</code> from the models folder.
+            </p>
+          ) : sg ? (
             <p className="notice">
               TripoSG weights not found in <code>data/models/triposg</code>. Run{" "}
               <code>uv run python -m trivexa.download triposg</code>.

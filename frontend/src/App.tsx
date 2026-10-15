@@ -55,6 +55,7 @@ const DEFAULT_MV_FORM: MultiviewForm = {
 };
 
 // TripoSG's upstream sampling defaults (50 steps, guidance 7); the face limit keeps meshes light for later tools.
+// Pixal3D's are its pipeline.json (12 steps per stage, guidance 7.5) at upstream's default 1536 resolution.
 const DEFAULT_3D_FORM: Model3DForm = {
   engine: "triposg",
   removeBg: true,
@@ -66,6 +67,12 @@ const DEFAULT_3D_FORM: Model3DForm = {
   guidance: 7,
   seed: 0,
   randomSeed: true,
+  p3dResolution: 1536,
+  p3dFov: 0,
+  p3dTextureSize: 2048,
+  p3dFaceLimit: 500_000,
+  p3dSteps: 12,
+  p3dGuidance: 7.5,
 };
 
 // MeshFlow's bundled config: 28 steps, image guidance 2.5.
@@ -144,7 +151,8 @@ export default function App() {
   const [mvSupport, setMvSupport] = useState<MultiviewSupport | null>(null);
   const [form3d, setForm3d] = usePersistentForm<Model3DForm>("trivexa.model3dForm", DEFAULT_3D_FORM);
   const [source3d, setSource3d] = useState<Source3D | null>(null);
-  const [model3dAvailable, setModel3dAvailable] = useState({ triposr: false, triposg: false });
+  const [model3dAvailable, setModel3dAvailable] = useState({ triposr: false, triposg: false, pixal3d: false });
+  const [pixal3dNote, setPixal3dNote] = useState<string | null>(null);
   const [meshflowAvailable, setMeshflowAvailable] = useState(false);
   const [meshflowImageAvailable, setMeshflowImageAvailable] = useState(false);
   const [remeshForm, setRemeshForm] = usePersistentForm<RemeshForm>("trivexa.remeshForm", DEFAULT_REMESH_FORM);
@@ -203,7 +211,8 @@ export default function App() {
       setTextureBaker(texture);
       setCheckpoints(checkpoints);
       setMvSupport(multiview);
-      setModel3dAvailable({ triposr: model3d.triposr, triposg: model3d.triposg });
+      setModel3dAvailable({ triposr: model3d.triposr, triposg: model3d.triposg, pixal3d: model3d.pixal3d });
+      setPixal3dNote(model3d.pixal3d_note);
       setMeshflowAvailable(model3d.meshflow);
       setMeshflowImageAvailable(model3d.meshflow_image);
       setSkintokensAvailable(model3d.skintokens);
@@ -308,7 +317,17 @@ export default function App() {
         source_image: source3d.type === "upload" ? source3d.dataUrl : null,
         remove_bg: form3d.removeBg,
         engine: form3d.engine,
-        ...(form3d.engine === "triposg"
+        ...(form3d.engine === "pixal3d"
+          ? {
+              steps: form3d.p3dSteps,
+              guidance: form3d.p3dGuidance,
+              seed: form3d.randomSeed ? -1 : form3d.seed,
+              face_limit: form3d.p3dFaceLimit,
+              resolution: form3d.p3dResolution,
+              fov: form3d.p3dFov,
+              texture_size: form3d.p3dTextureSize,
+            }
+          : form3d.engine === "triposg"
           ? {
               steps: form3d.steps,
               guidance: form3d.guidance,
@@ -590,6 +609,7 @@ export default function App() {
             setSource={setSource3d}
             selected={selectedAsset}
             available={model3dAvailable}
+            pixal3dNote={pixal3dNote}
             bgAvailable={mvSupport?.bg_removal ?? false}
             onGenerate={generate3d}
             submitting={submitting}

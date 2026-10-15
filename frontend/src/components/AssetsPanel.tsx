@@ -150,6 +150,7 @@ function Details({ asset }: { asset: Asset | null }) {
 const ENGINE_NAMES: Record<string, string> = {
   triposr: "TripoSR",
   triposg: "TripoSG",
+  pixal3d: "Pixal3D",
   meshflow: "MeshFlow remesh",
   "mv-adapter": "MV-Adapter texture",
   skintokens: "SkinTokens rig",
@@ -169,6 +170,17 @@ function Model3DDetails({ asset }: { asset: Asset }) {
           ["Bones", pr.bones ?? "—"],
           ["Beams", pr.beams ?? "—"],
           ["Temperature", pr.temperature ?? "—"],
+          ["Seed", pr.seed ?? "—"],
+        ] as [string, string | number][])
+      : pr.engine === "pixal3d"
+      ? ([
+          ["Resolution", pr.resolution_used && pr.resolution_used !== pr.resolution
+            ? `${pr.resolution_used} (of ${pr.resolution})` : pr.resolution ?? "—"],
+          ["Camera FOV", pr.fov_used ? `${pr.fov_used}°${pr.fov ? "" : " (estimated)"}` : "—"],
+          ["Texture", pr.texture_size ? `${pr.texture_size} × ${pr.texture_size} PBR` : "—"],
+          ["Face limit", pr.face_limit ? pr.face_limit.toLocaleString() : "1,000,000"],
+          ["Steps", pr.steps ?? "—"],
+          ["Guidance", pr.guidance ?? "—"],
           ["Seed", pr.seed ?? "—"],
         ] as [string, string | number][])
       : pr.textured

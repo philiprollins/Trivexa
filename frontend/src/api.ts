@@ -51,6 +51,11 @@ export interface Model3DParams {
   mc_resolution?: number;
   octree_depth?: number; // TripoSG
   face_limit?: number;
+  resolution?: 1024 | 1536; // Pixal3D: requested
+  resolution_used?: number; // Pixal3D: what the cascade ran at (lower when the token cap was hit)
+  fov?: number; // Pixal3D: requested FOV in degrees, 0 = estimated
+  fov_used?: number;
+  texture_size?: number;
   full_faces?: number; // faces of the undecimated mesh (model_urls.glb_full)
   engine: string;
   vertices?: number;
@@ -172,7 +177,15 @@ export const api = {
     request<{
       checkpoints: Checkpoint[];
       multiview: MultiviewSupport;
-      model3d: { triposr: boolean; triposg: boolean; meshflow: boolean; meshflow_image: boolean; skintokens: boolean };
+      model3d: {
+        triposr: boolean;
+        triposg: boolean;
+        pixal3d: boolean;
+        pixal3d_note: string | null;
+        meshflow: boolean;
+        meshflow_image: boolean;
+        skintokens: boolean;
+      };
       texture: TextureBaker;
     }>("/api/models"),
   samplers: () => request<{ samplers: Sampler[] }>("/api/samplers"),
@@ -185,7 +198,7 @@ export const api = {
     source_view?: number;
     source_image?: string | null;
     remove_bg: boolean;
-    engine: "triposr" | "triposg";
+    engine: "triposr" | "triposg" | "pixal3d";
     foreground_ratio?: number;
     mc_resolution?: number;
     steps?: number;
@@ -193,6 +206,9 @@ export const api = {
     seed?: number;
     octree_depth?: number;
     face_limit?: number;
+    resolution?: number; // Pixal3D
+    fov?: number;
+    texture_size?: number;
   }) => request<{ jobs: Job[] }>("/api/generate/3d", { method: "POST", body: JSON.stringify(params) }),
   generateTexture: (params: {
     source_asset: string;
