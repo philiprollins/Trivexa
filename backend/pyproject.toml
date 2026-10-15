@@ -24,6 +24,7 @@ dependencies = [
     "opencv-python-headless>=5.0.0.93",
     "pymeshlab>=2023.12",  # TripoSG face limit; also the texture baker
     "scikit-learn>=1.6",
+    "torchdiffeq>=0.2.5",
 ]
 
 [project.optional-dependencies]
