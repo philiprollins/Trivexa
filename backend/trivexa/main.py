@@ -25,15 +25,16 @@ from .engines import texture as texturing
 from .engines import meshflow as meshflow_engine
 from .engines import skintokens
 from .engines import texture_upstream
-from .engines import partfield, pixal3d, triposg, triposr
+from .engines import partfield, pixal3d, triposg, triposr, unimate
 from .engines.meshflow import MeshFlowEngine, MeshFlowParams
-from .engines.gltf_skin import skinned_glb
+from .engines.gltf_skin import add_animation, read_skeleton, skinned_glb
 from .engines.skintokens import RigParams, SkinTokensEngine
 from .engines.partfield import PartFieldEngine, SegmentParams
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
 from .engines.pixal3d import Pixal3DEngine, Pixal3DParams
 from .engines.triposg import TripoSGEngine, TripoSGParams
 from .engines.triposr import TripoSREngine, TripoSRParams
+from .engines.unimate import AnimateParams, Skeleton, UniMateEngine
 from .jobs import Job, JobManager
 from .store import Store
 
@@ -52,6 +53,7 @@ pixal = Pixal3DEngine()
 remesher = MeshFlowEngine()
 rigger = SkinTokensEngine()
 segmenter = PartFieldEngine()
+animator = UniMateEngine()
 
 
 def _texture_baker() -> tuple[str, str | None]:
@@ -72,7 +74,7 @@ if TEXTURE_BAKER_NOTE:
 
 def _exclusive(keep) -> None:
     """Only one large pipeline on the GPU at a time: unload every engine except `keep`."""
-    for engine in (diffusion, multiview, tripo, tripo_sg, pixal, remesher, rigger, segmenter):
+    for engine in (diffusion, multiview, tripo, tripo_sg, pixal, remesher, rigger, segmenter, animator):
         if engine is not keep:
             engine.unload()
 
@@ -120,6 +122,8 @@ def _loaded_label() -> str | None:
         return "SkinTokens"
     if segmenter.pvcnn is not None:
         return "PartField"
+    if animator.model is not None:
+        return "UniMate"
     return None
 
 
@@ -151,6 +155,7 @@ def list_models():
             "meshflow_image": meshflow_engine.image_available(),
             "skintokens": skintokens.available(),
             "partfield": partfield.available(),
+            "unimate": unimate.available(),
         },
         "texture": {"baker": TEXTURE_BAKER, "note": TEXTURE_BAKER_NOTE},
     }
@@ -597,6 +602,74 @@ def _rig_runner(mesh_path, input_image: Image.Image, half_turn: bool, params: di
         )
         glb = skinned_glb(mesh, rig.joints, rig.parents, rig.names, rig.weights)
         return store.save_model3d(mesh, input_image, params | {"bones": len(rig.joints)}, parent_id, glb=glb)
+
+    return run
+
+
+class AnimateRequest(BaseModel):
+    source_asset: str  # a rigged 3D model asset
+    prompt: str = Field(min_length=1, max_length=500)  # the motion, e.g. "walks forward, then turns left"
+    seed: int = Field(-1, ge=-1, le=2**32 - 1)
+    count: int = Field(1, ge=1, le=8)
+    guidance: float = Field(unimate.DEFAULT_CFG, ge=1.0, le=10.0)
+
+
+def _motion_caption(prompt: str) -> str:
+    """UniMate's training captions all read "An object <motion>." (one subject for every skeleton)."""
+    text = " ".join(prompt.split()).rstrip(".")
+    if not text.lower().startswith("an object"):
+        text = "An object " + text[0].lower() + text[1:]
+    return text + "."
+
+
+@app.post("/api/generate/animate")
+async def generate_animate(req: AnimateRequest):
+    source = store.get(req.source_asset)
+    if not source or source["kind"] != "model3d" or not source["params"].get("rigged"):
+        raise HTTPException(400, "Choose a rigged 3D model to animate")
+    if not unimate.available():
+        raise HTTPException(400, "UniMate weights not found (data/models/unimate)")
+    glb_path = OUTPUTS_DIR / source["model_urls"]["glb"].removeprefix("/files/")
+    input_image = Image.open(OUTPUTS_DIR / source["input_url"].removeprefix("/files/")).copy()
+    sp = source["params"]
+    base_seed = random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed
+    created = []
+    for i in range(req.count):
+        params = req.model_dump(exclude={"count"}) | {
+            "prompt": req.prompt.strip(),
+            "caption": _motion_caption(req.prompt),
+            "seed": (base_seed + i) % 2**32,
+            "engine": sp.get("engine", "mesh") + " + unimate",
+            "front": "+z",
+            "rigged": True,
+            "animated": True,
+            "bones": sp.get("bones"),
+            "frames": unimate.FRAMES,
+            "fps": unimate.FPS,
+            **{k: sp[k] for k in ("textured", "remeshed", "style") if sp.get(k)},
+        }
+        job = Job(kind="animate", params=params, run=_animate_runner(glb_path, input_image, params, source["id"]))
+        created.append(jobs.submit(job).public())
+    return {"jobs": created}
+
+
+def _animate_runner(glb_path, input_image: Image.Image, params: dict, parent_id: str):
+    def run(job: Job) -> dict:
+        import trimesh
+
+        _exclusive(animator)
+        glb = glb_path.read_bytes()
+        joints, parents, names = read_skeleton(glb)
+        motion = animator.animate(
+            Skeleton(joints, parents, names),
+            AnimateParams(prompt=params["caption"], seed=params["seed"], cfg_scale=params["guidance"]),
+            on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
+            is_cancelled=job.cancel_requested.is_set,
+        )
+        animated = add_animation(glb, params["prompt"][:80], motion.rotations, motion.root_translation, motion.fps)
+        mesh = trimesh.load(io.BytesIO(glb), file_type="glb", force="mesh")  # the OBJ stays the unanimated mesh
+        extra = {"joint_labels": motion.labels, "motion_consistency": round(motion.consistency, 4)}
+        return store.save_model3d(mesh, input_image, params | extra, parent_id, glb=animated)
 
     return run
 
