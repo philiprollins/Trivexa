@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# C++ compiler wrapper for building torch extensions whose setup.py pins -std=c++17 (FlexGEMM, CuMesh, o-voxel):
+# torch >= 2.10's headers need C++20. run.sh points CXX here (and NVCC_APPEND_FLAGS=-std=c++20 covers .cu files).
+args=()
+for a in "$@"; do
+  [[ $a == -std=c++17 ]] && a=-std=c++20
+  args+=("$a")
+done
+exec "${TRIVEXA_HOST_CXX:-c++}" "${args[@]}"

@@ -35,12 +35,26 @@ texture = [
     "gltflib>=1.0",
     "cvcuda-cu13>=0.18",
 ]
+# Pixal3D's TRELLIS.2 backbone: sparse convolution (FlexGEMM), mesh cleanup/remeshing (CuMesh) and the dual-grid
+# mesher + GLB baker (o-voxel). All three are compiled CUDA extensions whose setup.py pins C++17, which torch's
+# headers no longer accept: build them through run.sh (or with its CXX/NVCC_APPEND_FLAGS exports).
+pixal3d = [
+    "flex_gemm",
+    "cumesh",
+    "o_voxel",
+    "nvdiffrast",  # o-voxel's texture baker
+    "easydict>=1.13",
+    "scipy>=1.14",  # MoGe's focal/shift solver
+]
 
 [tool.uv]
-no-build-isolation-package = ["nvdiffrast"]
+no-build-isolation-package = ["nvdiffrast", "flex_gemm", "cumesh", "o_voxel"]
 
 [tool.uv.sources]
 nvdiffrast = { git = "https://github.com/NVlabs/nvdiffrast", tag = "v0.4.0" }
+flex_gemm = { git = "https://github.com/JeffreyXiang/FlexGEMM", rev = "6dd94a859c26ee8246888502eada3dd8ad85532e" }
+cumesh = { git = "https://github.com/JeffreyXiang/CuMesh", rev = "12289e1062f0603f2f0d0771b02e1395d247f26f" }
+o_voxel = { git = "https://github.com/microsoft/TRELLIS.2", rev = "75fbf0183001ed9876c8dbb35de6b68552ee08bd", subdirectory = "o-voxel" }
 torch = { index = "pytorch-cu130" }
 torchvision = { index = "pytorch-cu130" }
 
