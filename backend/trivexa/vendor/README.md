@@ -15,6 +15,7 @@ Only the files needed for inference are included; local edits are marked `# Triv
 | `pixal3d/` | https://github.com/TencentARC/Pixal3D | `f7cf38429b0bd264f1995f0f8743a88b1c728b94` | MIT (`pixal3d/LICENSE`, third parties in `pixal3d/NOTICE`) |
 | `naf/` | https://github.com/valeoai/NAF | `37f2dfc180f2de53d98bd601109c0da0dd6b0f43` | Apache-2.0 (`naf/LICENSE`) |
 | `moge/` | https://github.com/microsoft/MoGe | `74fbce054ebed49800de42d0ad0e83495065719a` | MIT (`moge/LICENSE`); its DINOv2 is Apache-2.0 |
+| `partfield/` | https://github.com/nv-tlabs/PartField | `373025dbd283bb44cc4a6dc78c99994dbc91de32` | NVIDIA License, non-commercial (`partfield/LICENSE`) |
 
 Weights are not vendored: MV-Adapter adapters are downloaded to `data/models/mv-adapter/`,
 BiRefNet weights are read from `<models dir>/background_removal/birefnet.safetensors`.
@@ -76,3 +77,11 @@ estimate. The DINOv2 training utilities and `moge/utils` are dropped except the 
 (`utils/geometry.py`, scipy); `infer()` builds the intrinsics itself instead of through utils3d, and its
 `force_projection` (which needs utils3d) is off. The weights (`<models dir>/geometry_estimation/
 moge_2_vitl_normal_fp16.safetensors`) carry no config; `engines/pixal3d.py` spells out `configs/train/v2.json`'s.
+
+`partfield/` keeps only the two networks inference runs: `model/PVCNN/` (the point-voxel encoder and the 3D-aware
+triplane U-Net, all plain PyTorch) and `model/triplane.py` (the triplane transformer), plus `model/model_utils.py`.
+No Lightning trainer, dataloaders, clustering scripts or demo apps: Trivexa builds the networks, samples per-face
+features and clusters them itself (`engines/partfield.py`, after `partfield/model_trainer_pvcnn_only_demo.py` and
+`run_part_clustering.py`). Local edits: `torch_scatter.scatter_mean` is replaced by torch's `scatter_reduce`, and the
+unused ConvPointnet encoder and profiling utilities are dropped. The NVIDIA License allows non-commercial research and
+educational use only, and covers the weights (`model_objaverse.ckpt`, read from `data/models/partfield/`) too.
