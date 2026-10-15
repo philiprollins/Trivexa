@@ -18,7 +18,7 @@ files* from `~/ComfyUI/models` (`TRIVEXA_MODELS_DIR`). Reading ComfyUI source fo
 cd backend && .venv/bin/uvicorn trivexa.main:app --reload --port 8000   # backend dev
 cd frontend && npm run dev                  # UI dev on :5173, proxies /api (incl. websocket) and /files to :8000
 cd frontend && npm run build                # type-check (tsc -b) + build; the server serves frontend/dist
-cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config skintokens triposg]  # resumable, SHA-256 checked
+cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config skintokens triposg partfield p3sam holopart]  # resumable, SHA-256 checked
 cd backend && uv sync --extra texture       # compiles nvdiffrast; needs CUDA_HOME=/usr/local/cuda on PATH
 CXX=$PWD/backend/tools/cxx20 NVCC_APPEND_FLAGS=-std=c++20 uv sync --extra texture --extra pixal3d  # as run.sh does
 ```
@@ -62,6 +62,8 @@ Downloaded by Trivexa into `data/models/` (via `trivexa.download`):
 | Remesh image guidance | `meshflow/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth` (from Meta's DINOv3 form, fetched by hand) |
 | Rig | SkinTokens `skintokens/experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt` (VAST-AI, MIT; includes the skin VAE) |
 | Image → 3D | TripoSG `triposg/{transformer,vae,image_encoder_dinov2}/` (VAST-AI/TripoSG, MIT weights; ~7.9 GB, fp32 on disk) |
+| Segment (not wired up yet) | PartField `partfield/model_objaverse.ckpt` (NVIDIA License, non-commercial) and P3-SAM `p3sam/p3sam/p3sam.safetensors` (Hunyuan 3D-Part license, not EU/UK/KR; includes its fine-tuned Sonata backbone) |
+| Fill parts (not wired up yet) | HoloPart `holopart/{transformer,vae,part_encoder}/` (VAST-AI/HoloPart, MIT; ~3.8 GB; the VAE is TripoSG's in fp16) |
 
 Still unused on disk: TRELLIS.2 itself (`diffusion_models/trellis_2_*`, `vae/trellis_2_*`, `microsoft/TRELLIS.2-4B`);
 Pixal3D's vendored code is TRELLIS.2's, so it would be a small step from there. SD 2.x / MV-Adapter SD2.1 variants are deliberately not supported.
