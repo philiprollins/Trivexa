@@ -49,8 +49,10 @@ KIMODO_REPO = "nvidia/Kimodo-SOMA-RP-v1.1"
 KIMODO_REVISION = "6c9233af1180b8151e3c4703477104af5dce9dd5"
 KIMODO_SOMA_DIR = KIMODO_DIR / "Kimodo-SOMA-RP-v1.1"
 KIMODO_TEXT_DIR = KIMODO_DIR / "text-encoder"
-LLAMA3_REPO = "meta-llama/Meta-Llama-3-8B-Instruct"  # gated: request access on the model page first
+LLAMA3_REPO = "meta-llama/Meta-Llama-3-8B-Instruct"  # gated; its file hashes are public, its files are not
 LLAMA3_REVISION = "8afb486c1db24fe5011ec46dfbe5b5dccdb575c2"
+# An ungated copy whose files are byte-identical to Meta's (checked against Meta's hashes on download).
+LLAMA3_MIRROR = ("NousResearch/Meta-Llama-3-8B-Instruct", "53346005fb0ef11d3b6a83b12c895cca40156b6c")
 LLM2VEC_REPO = "McGill-NLP/LLM2Vec-Meta-Llama-3-8B-Instruct-mntp"
 LLM2VEC_REVISION = "31474e395ada192e8ed1586db6be79fb3b70c9c0"
 LLM2VEC_SUPERVISED_REPO = "McGill-NLP/LLM2Vec-Meta-Llama-3-8B-Instruct-mntp-supervised"
@@ -66,6 +68,7 @@ class HubFile:
     filename: str  # path in the repo; lands at dest/filename
     dest: Path
     sha256: str | None = None  # None: the Hub's LFS SHA-256, or the git blob id of a small non-LFS file
+    mirror: tuple[str, str] | None = None  # (repo, revision) to download from instead, still checked against repo
 
 
 @dataclass(frozen=True)
@@ -75,8 +78,8 @@ class UrlFile:
     filename: str
     dest: Path
 
-def _hub_files(repo: str, revision: str, dest: Path, *filenames: str) -> tuple[HubFile, ...]:
-    return tuple(HubFile(repo, revision, f, dest) for f in filenames)
+def _hub_files(repo: str, revision: str, dest: Path, *filenames: str, mirror=None) -> tuple[HubFile, ...]:
+    return tuple(HubFile(repo, revision, f, dest, mirror=mirror) for f in filenames)
 
 
 # Kimodo's normalisation stats: small non-LFS files, so their checksums are spelled out.
@@ -194,8 +197,8 @@ ITEMS = {
         ),
         *KIMODO_STATS,
     ),
-    # Kimodo's text encoder, LLM2Vec (MIT): Llama-3-8B-Instruct (Llama 3 Community License, gated; ~16 GB bf16) made
-    # bidirectional, with LLM2Vec's MNTP LoRA merged in and its supervised LoRA on top. The ungated adapters come first.
+    # Kimodo's text encoder, LLM2Vec (MIT): Llama-3-8B-Instruct (Llama 3 Community License; ~16 GB bf16) made
+    # bidirectional, with LLM2Vec's MNTP LoRA merged in and its supervised LoRA on top.
     "kimodo-text": (
         *_hub_files(
             LLM2VEC_REPO,
@@ -226,6 +229,7 @@ ITEMS = {
             "tokenizer.json",
             "tokenizer_config.json",
             "special_tokens_map.json",
+            mirror=LLAMA3_MIRROR,
         ),
     ),
     # Mesh part segmentation, two alternatives. PartField (NVIDIA License: non-commercial) predicts a per-face
@@ -315,7 +319,8 @@ def _fetch_file(name: str, item: HubFile | UrlFile) -> None:
     print(f"{name}: downloading {item.filename} → {item.dest}")
     item.dest.mkdir(parents=True, exist_ok=True)
     if isinstance(item, HubFile):
-        hf_hub_download(item.repo, item.filename, revision=item.revision, local_dir=item.dest)
+        repo, revision = item.mirror or (item.repo, item.revision)
+        hf_hub_download(repo, item.filename, revision=revision, local_dir=item.dest)
     else:
         _download_url(item, target)
     actual = _digest(target, algorithm)
