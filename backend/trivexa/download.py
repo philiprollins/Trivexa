@@ -3,7 +3,8 @@
     uv run python -m trivexa.download             # everything
     uv run python -m trivexa.download ig2mv lama  # specific items (see ITEMS; an item may be several files)
 
-Downloads resume if interrupted and are checked against a known SHA-256.
+Downloads resume if interrupted and are checked against a known SHA-256. If a Hub download stalls (seen with hf_xet
+on HoloPart's transformer, stuck at 64 MiB), rerun with HF_HUB_DISABLE_XET=1.
 """
 
 import hashlib
@@ -14,7 +15,17 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
 
-from .config import MESHFLOW_DIR, MV_ADAPTER_DIR, SKINTOKENS_DIR, TEXTURE_WEIGHTS_DIR, TRIPOSG_DIR, UNIMATE_DIR
+from .config import (
+    HOLOPART_DIR,
+    MESHFLOW_DIR,
+    MV_ADAPTER_DIR,
+    P3SAM_DIR,
+    PARTFIELD_DIR,
+    SKINTOKENS_DIR,
+    TEXTURE_WEIGHTS_DIR,
+    TRIPOSG_DIR,
+    UNIMATE_DIR,
+)
 
 MV_ADAPTER_REPO = "huanngzh/mv-adapter"
 MV_ADAPTER_REVISION = "6de4033df6b53366f3c009d22f5ec434bb55e59f"
@@ -27,6 +38,12 @@ TRIPOSG_REPO = "VAST-AI/TripoSG"
 TRIPOSG_REVISION = "2c1c516d22d58db486a058d98d31bb6177344e06"
 UNIMATE_REPO = "Linzhan/UniMate"
 UNIMATE_REVISION = "174fc755ec248d0c98f27759b7a95648e7f05905"
+PARTFIELD_REPO = "mikaelaangel/partfield-ckpt"  # the checkpoint linked from nv-tlabs/PartField's README
+PARTFIELD_REVISION = "90b9b1e08b6a12fdcb6ee26b4854a26235e1765f"
+HUNYUAN3D_PART_REPO = "tencent/Hunyuan3D-Part"
+HUNYUAN3D_PART_REVISION = "677174466c53571e8bacd5050dff5948734a1a4d"
+HOLOPART_REPO = "VAST-AI/HoloPart"
+HOLOPART_REVISION = "29cdb1417121842c4c4d59b9d283cc734f8c3aec"
 
 
 @dataclass(frozen=True)
@@ -121,6 +138,43 @@ ITEMS = {
             "unimate_uniml3d_f60_v3/config.json",
             UNIMATE_DIR,
             "1ffbd379d3667de7d701ed6f3418f1c9d1a66f35d2653776255008c07c051aaa",
+        ),
+    ),
+    # Mesh part segmentation, two alternatives. PartField (NVIDIA License: non-commercial) predicts a per-face
+    # feature field that is clustered into any number of parts; the Objaverse-trained checkpoint is the only one
+    # released. P3-SAM (Tencent Hunyuan 3D-Part license, not valid in the EU/UK/South Korea) segments into
+    # parts automatically on a Sonata point-transformer backbone. p3sam.safetensors holds the fine-tuned Sonata
+    # weights too; upstream reads facebook/sonata's sonata.pth only for its architecture config (in_channels 9,
+    # enc_depths (3, 3, 3, 12, 3), enc_channels (48, 96, 192, 384, 512), enc_num_head (3, 6, 12, 24, 32),
+    # enc_patch_size 1024, enc_mode, mask_token), so that file is skipped.
+    "partfield": HubFile(PARTFIELD_REPO, PARTFIELD_REVISION, "model_objaverse.ckpt", PARTFIELD_DIR),
+    "p3sam": HubFile(HUNYUAN3D_PART_REPO, HUNYUAN3D_PART_REVISION, "p3sam/p3sam.safetensors", P3SAM_DIR),
+    # Part completion ("fill parts", MIT): a TripoSG-architecture DiT conditioned on the whole shape and one
+    # segmented part, generating that part's occluded geometry. Its VAE is TripoSG's, stored in fp16.
+    "holopart": (
+        HubFile(HOLOPART_REPO, HOLOPART_REVISION, "transformer/diffusion_pytorch_model.safetensors", HOLOPART_DIR),
+        HubFile(
+            HOLOPART_REPO,
+            HOLOPART_REVISION,
+            "transformer/config.json",
+            HOLOPART_DIR,
+            "a91478087ef0ac7c4b27b4fc4962a9e32af397f9b02b9e19673ef5c1e207bbc8",
+        ),
+        HubFile(HOLOPART_REPO, HOLOPART_REVISION, "vae/diffusion_pytorch_model.safetensors", HOLOPART_DIR),
+        HubFile(
+            HOLOPART_REPO,
+            HOLOPART_REVISION,
+            "vae/config.json",
+            HOLOPART_DIR,
+            "9e1b0a706fcc5da974367e1377907337e98be3291df56742105a1a5c6e80d16d",
+        ),
+        HubFile(HOLOPART_REPO, HOLOPART_REVISION, "part_encoder/diffusion_pytorch_model.safetensors", HOLOPART_DIR),
+        HubFile(
+            HOLOPART_REPO,
+            HOLOPART_REVISION,
+            "part_encoder/config.json",
+            HOLOPART_DIR,
+            "ab139241a8e72e39f082cd53e4e6c91b6d941c66b587fdc65aec24cfcfc2ce83",
         ),
     ),
 }
