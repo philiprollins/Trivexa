@@ -23,6 +23,7 @@ dependencies = [
     "xatlas>=0.0.11",
     "opencv-python-headless>=5.0.0.93",
     "pymeshlab>=2023.12",  # TripoSG face limit; also the texture baker
+    "scikit-learn>=1.6",
 ]
 
 [project.optional-dependencies]
