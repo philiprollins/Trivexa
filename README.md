@@ -9,7 +9,15 @@ A local image, multi-view and 3D generation studio. Runs entirely on this machin
   [MV-Adapter](https://github.com/huanngzh/MV-Adapter) on an SDXL checkpoint, either from text or from a
   reference image (background removed with BiRefNet). Any gallery image has a *Multiview* button.
 - **3D Model**: single-image reconstruction from an upload, a gallery image or any view of a multiview set, with
-  two engines. Models open in an orbit viewer (colour / clay / wireframe) and download as GLB or OBJ.
+  three engines. Models open in an orbit viewer (colour / clay / wireframe) and download as GLB or OBJ.
+  - [Pixal3D](https://github.com/TencentARC/Pixal3D): shape **and PBR texture** (base colour, metallic, roughness)
+    in one pass, on Microsoft's TRELLIS.2 backbone. Its image features are projected onto the 3D grid through the
+    camera that took the photo, so the result follows the input image closely; MoGe-2 estimates that camera's field
+    of view (or set one under *Camera & sampling*). A cascade of four 1.3B flow models (structure, shape at 512,
+    shape at 1024/1536, texture; 12 steps each) is followed by remeshing, UV unwrapping and a texture bake: ~55 s
+    at 1024 and ~2½ min at 1536 (default), plus ~50 s to load the first time. Peaks ~9 GB VRAM; the models wait in
+    ~14 GB of system RAM and take turns on the GPU. **Face limit** (100k–1M) is the decimation target after
+    remeshing. Needs the `pixal3d` extra (see [Run](#run)).
   - [TripoSG](https://github.com/VAST-AI-Research/TripoSG) (default): a 1.5B rectified-flow model that gives sharp,
     clean, watertight shapes. 50 steps take ~13 s and meshing at 512³ another ~11 s (~850k faces); **Face limit**
     (50k / 200k / 500k / Full, default 200k) decimates the result while keeping it watertight, and the full mesh is
@@ -70,6 +78,15 @@ by hand. Without it Remesh is shape-only.
 `skin_vae_2_10_32768/last.ckpt` and the Qwen3-0.6B config it fetches are not needed.
 `triposg` (~7.9 GB, fp32 on disk) is the default 3D engine's weights; without them only TripoSR can run.
 
+Pixal3D is not downloaded by Trivexa: it reads `TencentARC/Pixal3D/` (`pipeline.json` and the single-image
+`ckpts/`, from the gated huggingface.co/TencentARC/Pixal3D; the `*_mv` multi-view checkpoints aren't used),
+`clip_vision/dino_v3_L_naf_fp32.safetensors` (DINOv3 ViT-L/16 plus the NAF feature upsampler) and
+`geometry_estimation/moge_2_vitl_normal_fp16.safetensors` (MoGe-2) from the models folder. It also needs the
+`pixal3d` extra: FlexGEMM, CuMesh and o-voxel (TRELLIS.2's sparse convolution, mesh and voxel libraries), compiled
+CUDA extensions built from pinned commits. `run.sh` builds them (several minutes the first time). Their `setup.py`
+asks for C++17, which torch's headers reject, so `run.sh` compiles them as C++20 through `backend/tools/cxx20`
+and `NVCC_APPEND_FLAGS`; to sync by hand, export the same `CXX`/`NVCC_APPEND_FLAGS` first.
+
 ### Settings
 
 `settings.toml` (repo root; `TRIVEXA_SETTINGS` points elsewhere) holds options that need a restart:
@@ -98,7 +115,7 @@ cd frontend && npm run dev     # → http://localhost:5173 (proxies /api and /fi
 | Model files (read-only) | `~/ComfyUI/models` — override with `TRIVEXA_MODELS_DIR` |
 | Generated images | `data/outputs/images/YYYY-MM-DD/*.png` (settings embedded as PNG text chunks) |
 | Multi-view sets | `data/outputs/multiview/YYYY-MM-DD/<id>/` (`view_000.png` … `view_315.png`, `grid.png`, `reference.png`) |
-| 3D models | `data/outputs/models3d/YYYY-MM-DD/<id>/` (`model.glb`, `model.obj`, `input.png`; `model_full.glb` when a TripoSG face limit reduced the mesh; textured models also `material.mtl`, `texture.png`, `views.png`) |
+| 3D models | `data/outputs/models3d/YYYY-MM-DD/<id>/` (`model.glb`, `model.obj`, `input.png`; `model_full.glb` when a TripoSG face limit reduced the mesh; textured models also `material.mtl`, `texture.png` (base colour; Pixal3D's GLB also carries metallic/roughness), `views.png` for MV-Adapter textures) |
 | Downloaded weights | `data/models/` (MV-Adapter, texture baker, TripoSG, MeshFlow, SkinTokens) |
 | Thumbnails | `data/outputs/thumbs/` |
 | Asset database | `data/trivexa.db` (SQLite) |
@@ -118,6 +135,7 @@ backend/trivexa/
   engines/multiview.py  MV-Adapter text/image-to-multiview on an SDXL checkpoint
   engines/bg_removal.py BiRefNet foreground extraction
   engines/triposg.py    TripoSG image-to-mesh (default)
+  engines/pixal3d.py    Pixal3D image-to-textured-mesh (TRELLIS.2 cascade, MoGe-2 camera, o-voxel bake)
   engines/triposr.py    TripoSR image-to-mesh (fast)
   engines/meshflow.py   MeshFlow remeshing (dense mesh -> artist-style low-poly mesh)
   engines/skintokens.py SkinTokens rigging (mesh -> skeleton + skin weights)
@@ -125,7 +143,7 @@ backend/trivexa/
   engines/texture.py    ig2mv condition maps (headless OpenGL via moderngl/EGL) + the lean baker (xatlas, projection)
   engines/texture_upstream.py  MV-Adapter's texture pipeline (vendored) as the default baker
   download.py      resumable, checksum-verified weight downloads
-  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR, TripoSG, MeshFlow, DINOv3, SkinTokens); see vendor/README.md
+  vendor/          trimmed third-party inference code (MV-Adapter, BiRefNet, TripoSR, TripoSG, Pixal3D, NAF, MoGe, MeshFlow, DINOv3, SkinTokens); see vendor/README.md
 frontend/src/      React UI (Vite)
 ```
 
@@ -142,7 +160,7 @@ frontend/src/      React UI (Vite)
 - Prompts longer than 77 tokens are encoded in chunks rather than truncated. `(word:1.2)` weighting syntax is not parsed yet.
 - The SDXL VAE decodes in bf16 to avoid the fp16 NaN issue without the fp32 memory spike.
 - Only one large pipeline (image, multiview, 3D, remesh or rig) is on the GPU at a time; switching tools reloads
-  (~8 s for MV-Adapter, ~3 s for TripoSR, TripoSG peaks ~5.3 GB, ~5 s for MeshFlow (+ DINOv3 on the first image-guided remesh), which peaks
+  (~8 s for MV-Adapter, ~3 s for TripoSR, TripoSG peaks ~5.3 GB, ~50 s for Pixal3D, which peaks ~9 GB, ~5 s for MeshFlow (+ DINOv3 on the first image-guided remesh), which peaks
   ~6.3 GB; ~6 s for SkinTokens, which peaks ~4 GB).
   Image-to-multiview peaks around 14.4 GB of VRAM (the text encoders are parked in system RAM while it denoises),
   so it is tight on a 16 GB card if anything else is using the GPU.
@@ -155,11 +173,14 @@ these before using anything beyond personal, non-commercial work:
 - **TripoSG** (default 3D engine): code and weights are MIT, but the DiT is adapted from HunyuanDiT and keeps the
   Tencent Hunyuan Community License, which grants no licence in the European Union and forbids using outputs to
   improve other large language models. Use TripoSR in the EU.
+- **Pixal3D**: code and weights are MIT (TRELLIS.2, MoGe, FlexGEMM, CuMesh and o-voxel are MIT; NAF is Apache-2.0),
+  but Tencent does not offer the weights in the EU (the Hugging Face repo is gated and EU-disallowed). Its image
+  encoder is DINOv3 (DINOv3 License) and its texture bake uses nvdiffrast (non-commercial, below).
 - **MeshFlow** (Remesh): FAIR Noncommercial Research License, covering the code, the weights *and their outputs*, so
   remeshed models are for non-commercial research only.
-- **nvdiffrast** (the upstream texture baker, `texture` extra): NVIDIA Source Code License, non-commercial use only.
-  The lean baker (`baker = "lean"`) avoids it.
-- **DINOv3** (image-guided Remesh): DINOv3 License.
+- **nvdiffrast** (the upstream texture baker and Pixal3D's bake): NVIDIA Source Code License, non-commercial use
+  only. The lean baker (`baker = "lean"`) avoids it; Pixal3D can't.
+- **DINOv3** (image-guided Remesh, Pixal3D): DINOv3 License.
 - MV-Adapter (Apache-2.0), BiRefNet, TripoSR and SkinTokens (MIT) are permissive. SDXL / SD 1.5 checkpoints carry
   their own licences.
 

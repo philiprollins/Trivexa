@@ -14,17 +14,22 @@ files* from `~/ComfyUI/models` (`TRIVEXA_MODELS_DIR`). Reading ComfyUI source fo
 ## Commands
 
 ```bash
-./run.sh                                    # build UI if stale, uv sync (+ "texture" extra), serve on 127.0.0.1:8000
+./run.sh                                    # build UI if stale, uv sync (+ "texture", "pixal3d" extras), serve on 127.0.0.1:8000
 cd backend && .venv/bin/uvicorn trivexa.main:app --reload --port 8000   # backend dev
 cd frontend && npm run dev                  # UI dev on :5173, proxies /api (incl. websocket) and /files to :8000
 cd frontend && npm run build                # type-check (tsc -b) + build; the server serves frontend/dist
 cd backend && uv run python -m trivexa.download [t2mv i2mv ig2mv tg2mv esrgan lama meshflow meshflow-config skintokens triposg]  # resumable, SHA-256 checked
 cd backend && uv sync --extra texture       # compiles nvdiffrast; needs CUDA_HOME=/usr/local/cuda on PATH
+CXX=$PWD/backend/tools/cxx20 NVCC_APPEND_FLAGS=-std=c++20 uv sync --extra texture --extra pixal3d  # as run.sh does
 ```
 
 - There are no automated tests or linters. Changes have been verified by driving the real API (POST a job, watch
   the `/api/ws` websocket for `job`/`progress` events) and by checking the UI in Chrome. `npm run build` is the
   frontend type check.
+- The `pixal3d` extra compiles FlexGEMM, CuMesh and o-voxel from pinned git commits. Their `setup.py` pins
+  `-std=c++17`, which torch 2.14's headers reject (`#error C++20 or later`): `tools/cxx20` swaps the flag for `.cpp`
+  files and `NVCC_APPEND_FLAGS` overrides it for `.cu` (nvcc takes the last `-std`). `uv lock` clones TRELLIS.2 and
+  its Eigen submodule from GitLab, which can take 15+ minutes.
 - `uv sync` removes packages not in `pyproject.toml`/`uv.lock`, so anything installed ad hoc with `uv pip install`
   disappears on the next `./run.sh`. Add real dependencies with `uv add` (torch/torchvision come from the cu130 index).
 - Stop the server with `kill $(pgrep -f "[u]vicorn trivexa")` — a bare `pkill -f "uvicorn trivexa"` matches and
@@ -42,6 +47,9 @@ From `~/ComfyUI/models` (architecture is detected from safetensors headers, not 
 | Hidden (not image models) | `ace_step*`, `stable-audio-open-1.0`, `yue2_3b_int8_convrot` (audio) |
 | Background removal | `background_removal/birefnet.safetensors` (= ZhengPeng7/BiRefNet) |
 | Image → 3D | `triposr/` (`config.yaml`, `model.ckpt`, `dino/config.json` = stabilityai/TripoSR) |
+| Image → textured 3D | `TencentARC/Pixal3D/` (`pipeline.json` + `ckpts/`, single-image set; the `*_mv` checkpoints aren't used) |
+| Pixal3D image encoder | `clip_vision/dino_v3_L_naf_fp32.safetensors` (DINOv3 ViT-L/16, transformers-4 key names, + `naf.*` NAF upsampler) |
+| Pixal3D camera FOV | `geometry_estimation/moge_2_vitl_normal_fp16.safetensors` (MoGe-2 ViT-L normal; no config inside) |
 
 Downloaded by Trivexa into `data/models/` (via `trivexa.download`):
 
@@ -55,13 +63,13 @@ Downloaded by Trivexa into `data/models/` (via `trivexa.download`):
 | Rig | SkinTokens `skintokens/experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt` (VAST-AI, MIT; includes the skin VAE) |
 | Image → 3D | TripoSG `triposg/{transformer,vae,image_encoder_dinov2}/` (VAST-AI/TripoSG, MIT weights; ~7.9 GB, fp32 on disk) |
 
-Still unused on disk, candidates for better 3D engines: TRELLIS.2 (`diffusion_models/trellis_2_*`, `vae/trellis_2_*`,
-`microsoft/TRELLIS.2-4B`) and Pixal3D. SD 2.x / MV-Adapter SD2.1 variants are deliberately not supported.
+Still unused on disk: TRELLIS.2 itself (`diffusion_models/trellis_2_*`, `vae/trellis_2_*`, `microsoft/TRELLIS.2-4B`);
+Pixal3D's vendored code is TRELLIS.2's, so it would be a small step from there. SD 2.x / MV-Adapter SD2.1 variants are deliberately not supported.
 
 ## Built so far
 
 Image tool (SDXL + SD 1.5, long-prompt chunking, live x0 previews, cancel) → Multiview tool (MV-Adapter t2mv/i2mv,
-6 views at 768 px) → 3D Model tool (TripoSG by default, or TripoSR; orbit viewer with colour/clay/wire, GLB/OBJ) → Remesh tool (MeshFlow,
+6 views at 768 px) → 3D Model tool (TripoSG by default, Pixal3D for shape + PBR texture in one pass, or TripoSR; orbit viewer with colour/clay/wire, GLB/OBJ) → Remesh tool (MeshFlow,
 dense mesh → ~1k-face artist-style mesh, colours transferred as vertex colours) → Texture tool (ig2mv or tg2mv
 views baked into a UV texture by MV-Adapter's own pipeline, with Trivexa's lean baker as a fallback) → Rig tool (SkinTokens,
 skeleton + skin weights in a skinned GLB; the viewer shows bones and runs a pose test). Gallery, favorites,
@@ -101,6 +109,16 @@ anything else resident.
   ~5.3 GB peak. `params.face_limit` is the request; `params.faces` stays the saved mesh's count. When the limit
   reduced the mesh, the raw one is kept as `model_full.glb` (`model_urls.glb_full`, `params.full_faces`, ~15 MB at
   850k faces; no OBJ). Remesh reads it in preference to `model.glb`; Texture and Rig use the decimated mesh.
+- `pixal3d.py` — Pixal3D (TRELLIS.2 backbone): DINOv3 (+ NAF-upsampled) features projected onto the voxel grid
+  through the input's camera, whose FOV MoGe-2 estimates (`camera_from_fov` = upstream's `distance_from_fov`). Runs
+  upstream's cascade itself: sparse structure → shape latent at 512 → upsampled shape latent at 1024/1536 (capped at
+  `MAX_TOKENS`, lowering the resolution by 128 until it fits) → texture latent → decode → `o_voxel.postprocess.to_glb`
+  (CuMesh remesh, UV unwrap, nvdiffrast bake of base colour/metallic/roughness). The four 1.3B flow models (bf16
+  blocks, fp32 on disk) stay on the CPU (~14 GB RAM) and each moves to the GPU for its stage; DINOv3/NAF stay on the
+  GPU through sampling. Load ~50 s; 1024 ~55 s, 1536 ~140 s; peak ~9 GB. Noise comes from the global CPU generator
+  seeded once, as upstream. Images are cropped/flattened on **black** (upstream's preprocess). Output is a PBR
+  `trimesh` turned to Y-up facing +Z (upstream's own final rotation faces −Z); `params.textured`, `fov_used`,
+  `resolution_used`. Texture/Remesh/Rig accept it like any model.
 - `meshflow.py` — MeshFlow DiT + MeshVAE decoder, optionally guided by a reference image encoded with DINOv3
   ViT-L/16 (built locally instead of via torch.hub; CFG 2.5 on the image condition, ~10 s; shape-only ~5 s, no CFG).
   The image is cut out with BiRefNet and flattened on white (`prepare_reference(..., background=1.0)`). The checkpoint
@@ -135,13 +153,17 @@ references, model files, extra images). Multiview sets and 3D models each get a 
 delete removes the folder. The schema migrates in place (`ALTER TABLE` when a column is missing). 3D thumbnails start as
 the input image and are replaced by a render the browser uploads the first time the model is opened.
 
-**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR, TripoSG, MeshFlow, DINOv3 and SkinTokens inference code is
+**Vendored code** (`backend/trivexa/vendor/`, see its README). MV-Adapter, BiRefNet, TripoSR, TripoSG, Pixal3D, NAF, MoGe, MeshFlow, DINOv3 and SkinTokens inference code is
 copied at pinned commits instead of pip-installed, to avoid their heavy unrelated dependencies and
 `trust_remote_code`. Local edits are marked `# Trivexa:`. TripoSG's DiT is HunyuanDiT-derived (Tencent Hunyuan
-Community License: not licensed in the EU); its FlashVDM-licensed fast decoder is removed. `mvadapter/utils/mesh_utils/__init__.py` is intentionally
+Community License: not licensed in the EU); its FlashVDM-licensed fast decoder is removed. NAF's NATTEN attention
+is reimplemented in PyTorch (exact for integer upsampling factors); Pixal3D's image conditioning
+(`vendor/pixal3d/image_cond.py`) projects only occupied voxels (`point_index`), identical to upstream's full-grid
+projection but without its 7 GB grid at 1536. `mvadapter/utils/mesh_utils/__init__.py` is intentionally
 empty so the camera helpers import without nvdiffrast/Triton/CV-CUDA. nvdiffrast is non-commercial licensed.
 
-**Library-version quirks already handled.** transformers 5 flattened `CLIPTextModel` (no `.text_model`; diffusers'
+**Library-version quirks already handled.** transformers 5 moved DINOv3's blocks to `.model.layer` (Pixal3D's
+DINOv3 file has 4.x names, remapped on load). transformers 5 flattened `CLIPTextModel` (no `.text_model`; diffusers'
 SD1.5 clip-skip path still assumes it) and renamed ViT layers (TripoSR's checkpoint keys are remapped on load).
 Current pymeshlab renamed `Percentage` → `PercentageValue`.
 
