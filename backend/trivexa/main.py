@@ -25,11 +25,12 @@ from .engines import texture as texturing
 from .engines import meshflow as meshflow_engine
 from .engines import skintokens
 from .engines import texture_upstream
-from .engines import triposg, triposr
+from .engines import pixal3d, triposg, triposr
 from .engines.meshflow import MeshFlowEngine, MeshFlowParams
 from .engines.gltf_skin import skinned_glb
 from .engines.skintokens import RigParams, SkinTokensEngine
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
+from .engines.pixal3d import Pixal3DEngine, Pixal3DParams
 from .engines.triposg import TripoSGEngine, TripoSGParams
 from .engines.triposr import TripoSREngine, TripoSRParams
 from .jobs import Job, JobManager
@@ -46,6 +47,7 @@ multiview = MultiviewEngine()
 bg_remover = BackgroundRemover()
 tripo = TripoSREngine()
 tripo_sg = TripoSGEngine()
+pixal = Pixal3DEngine()
 remesher = MeshFlowEngine()
 rigger = SkinTokensEngine()
 
@@ -68,7 +70,7 @@ if TEXTURE_BAKER_NOTE:
 
 def _exclusive(keep) -> None:
     """Only one large pipeline on the GPU at a time: unload every engine except `keep`."""
-    for engine in (diffusion, multiview, tripo, tripo_sg, remesher, rigger):
+    for engine in (diffusion, multiview, tripo, tripo_sg, pixal, remesher, rigger):
         if engine is not keep:
             engine.unload()
 
@@ -108,6 +110,8 @@ def _loaded_label() -> str | None:
         return f"{multiview.model_path.stem} · MV-Adapter {multiview.mode}"
     if tripo_sg.transformer is not None:
         return "TripoSG"
+    if pixal.models is not None:
+        return "Pixal3D"
     if remesher.pipe is not None:
         return "MeshFlow"
     if rigger.model is not None:
@@ -137,6 +141,8 @@ def list_models():
         "model3d": {
             "triposr": triposr.available(),
             "triposg": triposg.available(),
+            "pixal3d": PIXAL3D_NOTE is None,
+            "pixal3d_note": PIXAL3D_NOTE,
             "meshflow": meshflow_engine.available(),
             "meshflow_image": meshflow_engine.image_available(),
             "skintokens": skintokens.available(),
@@ -337,22 +343,31 @@ class Model3DRequest(BaseModel):
     source_view: int = 0  # azimuth, when the source is a multiview set
     source_image: str | None = Field(None, max_length=40_000_000)
     remove_bg: bool = True
-    engine: Literal["triposr", "triposg"] = "triposr"
+    engine: Literal["triposr", "triposg", "pixal3d"] = "triposr"
     # TripoSR
     foreground_ratio: float = Field(0.85, ge=0.5, le=1.0)
     mc_resolution: int = Field(256, ge=64, le=512)
-    # TripoSG
-    steps: int = Field(50, ge=4, le=100)
-    guidance: float = Field(7.0, ge=1.0, le=15.0)
+    # TripoSG and Pixal3D (steps and guidance default per engine, see _MODEL3D_DEFAULTS)
+    steps: int | None = Field(None, ge=4, le=100)
+    guidance: float | None = Field(None, ge=1.0, le=15.0)
     seed: int = Field(-1, ge=-1, le=2**32 - 1)
-    octree_depth: Literal[8, 9] = 9
-    face_limit: int = Field(0, ge=0, le=2_000_000)  # 0: keep every face ("faces" is the saved mesh's count)
+    # TripoSG: 0 keeps every face; Pixal3D: decimation target after remeshing, 0 is upstream's 1M.
+    # ("faces" is the saved mesh's count.)
+    face_limit: int = Field(0, ge=0, le=2_000_000)
+    octree_depth: Literal[8, 9] = 9  # TripoSG
+    # Pixal3D
+    resolution: Literal[1024, 1536] = 1536
+    fov: float = Field(0, ge=0, le=120)  # horizontal camera FOV in degrees; 0 estimates it with MoGe-2
+    texture_size: Literal[1024, 2048, 4096] = 2048
 
 
 _MODEL3D_FIELDS = {
     "triposr": ("foreground_ratio", "mc_resolution"),
     "triposg": ("steps", "guidance", "octree_depth", "face_limit"),
+    "pixal3d": ("steps", "guidance", "face_limit", "resolution", "fov", "texture_size"),
 }
+_MODEL3D_DEFAULTS = {"triposg": {"steps": 50, "guidance": 7.0}, "pixal3d": {"steps": 12, "guidance": 7.5}}
+PIXAL3D_NOTE = pixal3d.unavailable_reason()
 
 
 @app.post("/api/generate/3d")
@@ -361,13 +376,18 @@ async def generate_3d(req: Model3DRequest):
         raise HTTPException(400, "TripoSR weights not found (models/triposr)")
     if req.engine == "triposg" and not triposg.available():
         raise HTTPException(400, "TripoSG weights not found; run: uv run python -m trivexa.download triposg")
+    if req.engine == "pixal3d" and PIXAL3D_NOTE:
+        raise HTTPException(400, f"Pixal3D unavailable: {PIXAL3D_NOTE}")
     if req.remove_bg and not bg_remover.available():
         raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
     source, parent_id = _load_source_image(req.source_asset, req.source_image, req.source_view)
     # "front" records which way the mesh faces; older TripoSR models (before it was set) face -Z.
     params = req.model_dump(include={"source_asset", "source_view", "remove_bg", *_MODEL3D_FIELDS[req.engine]})
     params |= {"engine": req.engine, "front": "+z"}
-    if req.engine == "triposg":
+    for k, v in _MODEL3D_DEFAULTS.get(req.engine, {}).items():
+        if params.get(k) is None:
+            params[k] = v
+    if req.engine in ("triposg", "pixal3d"):
         params["seed"] = random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed
     job = Job(kind="model3d", params=params, run=_model3d_runner(params, source, parent_id))
     return {"jobs": [jobs.submit(job).public()]}
@@ -375,11 +395,30 @@ async def generate_3d(req: Model3DRequest):
 
 def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
     def run(job: Job) -> dict:
-        engine = tripo_sg if params["engine"] == "triposg" else tripo
+        engine = {"triposg": tripo_sg, "pixal3d": pixal}.get(params["engine"], tripo)
         _exclusive(engine)
         image = bg_remover.remove(source) if params["remove_bg"] else source
         on_step = lambda step, total, preview: jobs.report_step(job, step, total, preview)  # noqa: E731
         full = None
+        if engine is pixal:
+            mesh, processed, info = pixal.generate(
+                Pixal3DParams(
+                    image=image,
+                    seed=params["seed"],
+                    resolution=params["resolution"],
+                    steps=params["steps"],
+                    guidance=params["guidance"],
+                    fov=params["fov"] or None,
+                    faces=params["face_limit"] or 1_000_000,
+                    texture_size=params["texture_size"],
+                ),
+                on_step=on_step,
+                is_cancelled=job.cancel_requested.is_set,
+            )
+            # "fov" stays the request (0 = estimated); the FOV and cascade resolution actually used are recorded.
+            extra = {"textured": True, "fov_used": info["fov"], "resolution_used": info["resolution"]}
+            texture = mesh.visual.material.baseColorTexture.convert("RGB")
+            return store.save_model3d(mesh, processed, params | extra, parent_id, images={"texture": texture})
         if engine is tripo_sg:
             mesh, processed, full = tripo_sg.generate(
                 TripoSGParams(
