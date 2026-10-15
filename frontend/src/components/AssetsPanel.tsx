@@ -182,6 +182,7 @@ function Model3DDetails({ asset }: { asset: Asset }) {
       : pr.animated
       ? ([
           ["Motion", pr.prompt ?? "—"],
+          ...(pr.clips && pr.clips.length > 1 ? ([["Animations", `${pr.clips.length} (the latest plays first)`]] as [string, string][]) : []),
           ["Length", pr.frames && pr.fps ? `${(pr.frames / pr.fps).toFixed(1)} s · ${pr.frames} frames` : "—"],
           ["Bones", pr.bones ?? "—"],
           ["Guidance", pr.guidance ?? "—"],

@@ -1123,3 +1123,10 @@ button:disabled {
 .suggestion:hover {
   color: var(--text);
 }
+
+.clip-select {
+  width: auto;
+  max-width: 200px;
+  padding: 5px 8px;
+  font-size: 12px;
+}

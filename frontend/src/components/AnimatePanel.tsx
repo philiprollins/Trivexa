@@ -61,6 +61,12 @@ export function AnimatePanel(p: Props) {
             <p className="hint">Select a rigged model in the gallery, or press Animate on one in the viewer.</p>
           )}
           {model && !rigged && <p className="notice">This model has no skeleton yet: rig it first.</p>}
+          {model?.params.animated && (
+            <p className="hint">
+              The new motion is added to this model's {model.params.clips?.length ?? "existing"} animation
+              {model.params.clips?.length === 1 ? "" : "s"}; animate the rigged model it came from for a fresh one.
+            </p>
+          )}
           {p.selected?.kind === "model3d" && p.selected.params.rigged && p.selected.id !== model?.id && (
             <button className="link-btn use-selected" onClick={() => p.setModel(p.selected)}>
               Use the selected rigged model

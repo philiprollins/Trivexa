@@ -15,8 +15,12 @@ interface Props {
   skeleton?: boolean;
   /** Rigged models: sway every bone to show how the skin weights deform the mesh. */
   pose?: boolean;
-  /** Animated models: play the GLB's first animation in a loop (paused on its current frame when false). */
+  /** Animated models: play the selected animation in a loop (paused on its current frame when false). */
   play?: boolean;
+  /** Animated models: index of the clip to play (default: the last, i.e. the latest added). */
+  clip?: number;
+  /** Called with the GLB's animation names once it has loaded (empty for a model without animations). */
+  onClips?: (names: string[]) => void;
   /** Animated models: hold the root's horizontal position so travelling motions stay in view. */
   inPlace?: boolean;
 }
@@ -42,7 +46,7 @@ const PART_MATERIALS = PART_COLORS.map((color) => new THREE.MeshStandardMaterial
 
 /** Orbitable GLB preview: vertex colours, clay, or wireframe-over-clay; segmented models can colour each part, rigged
  * models can show and pose their bones, animated ones play their clip. */
-export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = false, pose = false, play = false, inPlace = false }: Props) {
+export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = false, pose = false, play = false, inPlace = false, clip, onClips }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const state = useRef<{
     meshes: THREE.Mesh[];
@@ -52,8 +56,11 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
     helper?: THREE.SkeletonHelper;
     bones: PoseBone[];
     mixer?: THREE.AnimationMixer;
-    rootTrack?: { track: THREE.VectorKeyframeTrack; travel: Float32Array; held: Float32Array };
-  }>({ meshes: [], originals: new Map(), wires: [], bones: [] });
+    clips: THREE.AnimationClip[];
+    rootTracks: RootTrack[]; // per clip with a root translation track
+  }>({ meshes: [], originals: new Map(), wires: [], bones: [], clips: [], rootTracks: [] });
+  const clipsRef = useRef(onClips);
+  clipsRef.current = onClips;
   const snapshotRef = useRef(onSnapshot);
   snapshotRef.current = onSnapshot;
 
@@ -171,23 +178,24 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
 
       if (gltf.animations.length) {
         // Started now, but advanced only from the next frame: the thumbnail below still shows the rest pose.
-        const mixer = new THREE.AnimationMixer(root);
-        const clip = gltf.animations[0];
-        mixer.clipAction(clip).play();
-        state.current.mixer = mixer;
-        // The root's translation track: keep the travelling values and a copy held at the first frame's X/Z.
-        const track = clip.tracks.find((t) => t.name.endsWith(".position")) as THREE.VectorKeyframeTrack | undefined;
-        if (track) {
+        state.current.mixer = new THREE.AnimationMixer(root);
+        state.current.clips = gltf.animations;
+        for (const clip of gltf.animations) {
+          // The root's translation track: keep the travelling values and a copy held at the first frame's X/Z.
+          const track = clip.tracks.find((t) => t.name.endsWith(".position")) as THREE.VectorKeyframeTrack | undefined;
+          if (!track) continue;
           const travel = Float32Array.from(track.values);
           const held = Float32Array.from(travel);
           for (let i = 0; i < held.length; i += 3) {
             held[i] = travel[0];
             held[i + 2] = travel[2];
           }
-          state.current.rootTrack = { track, travel, held };
+          state.current.rootTracks.push({ track, travel, held });
           track.values.set(inPlaceRef.current ? held : travel);
         }
+        startClip(state.current, clipRef.current);
       }
+      clipsRef.current?.(gltf.animations.map((a, i) => a.name || `Animation ${i + 1}`));
 
       const radius = size.length() / 2;
       const target = new THREE.Vector3(0, size.y / 2, 0);
@@ -228,7 +236,7 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
       el.removeChild(renderer.domElement);
       state.current.helper?.dispose();
       state.current.mixer?.stopAllAction();
-      state.current = { meshes: [], originals: new Map(), wires: [], bones: [] };
+      state.current = { meshes: [], originals: new Map(), wires: [], bones: [], clips: [], rootTracks: [] };
     };
   }, [url]);
 
@@ -242,10 +250,12 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
   playRef.current = play;
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  const clipRef = useRef(clip);
+  clipRef.current = clip;
   useEffect(() => {
-    const r = state.current.rootTrack;
-    if (r) r.track.values.set(inPlace ? r.held : r.travel);
+    for (const r of state.current.rootTracks) r.track.values.set(inPlace ? r.held : r.travel);
   }, [inPlace]);
+  useEffect(() => startClip(state.current, clip), [clip]);
   useEffect(() => {
     if (state.current.helper) state.current.helper.visible = skeleton;
   }, [skeleton]);
@@ -255,6 +265,20 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
   }, [autoRotate, url]);
 
   return <div ref={host} className="model-viewer" />;
+}
+
+interface RootTrack {
+  track: THREE.VectorKeyframeTrack;
+  travel: Float32Array;
+  held: Float32Array;
+}
+
+/** Play clip `index` (default the last one, the latest added) from its start, stopping any other. */
+function startClip(s: { mixer?: THREE.AnimationMixer; clips: THREE.AnimationClip[] }, index?: number) {
+  if (!s.mixer || !s.clips.length) return;
+  const clip = s.clips[index !== undefined && index < s.clips.length ? index : s.clips.length - 1];
+  s.mixer.stopAllAction();
+  s.mixer.clipAction(clip).reset().play();
 }
 
 function applyMode(

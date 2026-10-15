@@ -27,7 +27,7 @@ from .engines import skintokens
 from .engines import texture_upstream
 from .engines import partfield, pixal3d, triposg, triposr, unimate
 from .engines.meshflow import MeshFlowEngine, MeshFlowParams
-from .engines.gltf_skin import add_animation, read_skeleton, skinned_glb
+from .engines.gltf_skin import add_animation, animation_names, read_skeleton, skinned_glb
 from .engines.skintokens import RigParams, SkinTokensEngine
 from .engines.partfield import PartFieldEngine, SegmentParams
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
@@ -668,7 +668,12 @@ def _animate_runner(glb_path, input_image: Image.Image, params: dict, parent_id:
         )
         animated = add_animation(glb, params["prompt"][:80], motion.rotations, motion.root_translation, motion.fps)
         mesh = trimesh.load(io.BytesIO(glb), file_type="glb", force="mesh")  # the OBJ stays the unanimated mesh
-        extra = {"joint_labels": motion.labels, "motion_consistency": round(motion.consistency, 4)}
+        # An animated source keeps its clips: the new one is added after them (the viewer plays the latest).
+        extra = {
+            "joint_labels": motion.labels,
+            "motion_consistency": round(motion.consistency, 4),
+            "clips": animation_names(animated),
+        }
         return store.save_model3d(mesh, input_image, params | extra, parent_id, glb=animated)
 
     return run

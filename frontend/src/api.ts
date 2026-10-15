@@ -84,6 +84,7 @@ export interface Model3DParams {
   frames?: number;
   fps?: number;
   joint_labels?: string[];
+  clips?: string[]; // animation names in the GLB, oldest first
 }
 
 export type RigStyle = "auto" | "humanoid";

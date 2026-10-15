@@ -44,6 +44,13 @@ export function Viewer(props: Props) {
   const [posing, setPosing] = useState(false);
   const [playing, setPlaying] = useState(true);
   const [inPlace, setInPlace] = useState(true);
+  // The open model's animation clips and the one playing (undefined: the latest, i.e. the last in the GLB).
+  const [clipNames, setClipNames] = useState<string[]>([]);
+  const [clip, setClip] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    setClipNames([]);
+    setClip(undefined);
+  }, [asset?.id]);
   // A segmented model opens on its parts; other models fall back to Color if Parts was left on.
   const segmented = !!asset?.params.segmented;
   useEffect(() => {
@@ -144,6 +151,8 @@ export function Viewer(props: Props) {
                 pose={!!asset.params.rigged && !asset.params.animated && posing}
                 play={!!asset.params.animated && playing}
                 inPlace={inPlace}
+                clip={clip}
+                onClips={setClipNames}
                 onSnapshot={asset.thumb_rendered ? undefined : (dataUrl) => props.onModelSnapshot(asset, dataUrl)}
               />
             </Suspense>
@@ -183,6 +192,20 @@ export function Viewer(props: Props) {
                       {playing ? <Pause size={16} /> : <Play size={16} />}
                     </button>
                   ) : null}
+                  {clipNames.length > 1 && (
+                    <select
+                      className="select clip-select"
+                      value={clip ?? clipNames.length - 1}
+                      onChange={(e) => setClip(Number(e.target.value))}
+                      title="Animation to play"
+                    >
+                      {clipNames.map((name, i) => (
+                        <option key={i} value={i}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   {asset.params.animated ? (
                     <button
                       className={`icon-btn ${inPlace ? "active" : ""}`}

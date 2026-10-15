@@ -94,9 +94,18 @@ def add_animation(glb: bytes, name: str, rotations: np.ndarray, root_translation
     binary, acc = _append(gltf, binary, np.asarray(root_translation, dtype=np.float32), _FLOAT, "VEC3")
     samplers.append({"input": t_acc, "output": acc, "interpolation": "LINEAR"})
     channels.append({"sampler": len(samplers) - 1, "target": {"node": roots[0], "path": "translation"}})
-    gltf.setdefault("animations", []).append({"name": name, "samplers": samplers, "channels": channels})
+    taken = {a.get("name") for a in gltf.get("animations", [])}
+    unique, n = name, 1
+    while unique in taken:  # a clip added again with the same prompt
+        n += 1
+        unique = f"{name} ({n})"
+    gltf.setdefault("animations", []).append({"name": unique, "samplers": samplers, "channels": channels})
     gltf["buffers"][0]["byteLength"] = len(binary)
     return _join(gltf, binary)
+
+
+def animation_names(glb: bytes) -> list[str]:
+    return [a.get("name", "") for a in _split(glb)[0].get("animations", [])]
 
 
 def read_skeleton(glb: bytes) -> tuple[np.ndarray, list[int], list[str]]:
