@@ -16,6 +16,7 @@ Only the files needed for inference are included; local edits are marked `# Triv
 | `naf/` | https://github.com/valeoai/NAF | `37f2dfc180f2de53d98bd601109c0da0dd6b0f43` | Apache-2.0 (`naf/LICENSE`) |
 | `moge/` | https://github.com/microsoft/MoGe | `74fbce054ebed49800de42d0ad0e83495065719a` | MIT (`moge/LICENSE`); its DINOv2 is Apache-2.0 |
 | `partfield/` | https://github.com/nv-tlabs/PartField | `373025dbd283bb44cc4a6dc78c99994dbc91de32` | NVIDIA License, non-commercial (`partfield/LICENSE`) |
+| `unimate/` | https://github.com/Friedrich-M/UniMate | `b78c7807df7cf4231d4e67f8d0ece29c5e11025b` | MIT (`unimate/LICENSE`); the weights are CC BY-NC 4.0 |
 
 Weights are not vendored: MV-Adapter adapters are downloaded to `data/models/mv-adapter/`,
 BiRefNet weights are read from `<models dir>/background_removal/birefnet.safetensors`.
@@ -85,3 +86,17 @@ features and clusters them itself (`engines/partfield.py`, after `partfield/mode
 `run_part_clustering.py`). Local edits: `torch_scatter.scatter_mean` is replaced by torch's `scatter_reduce`, and the
 unused ConvPointnet encoder and profiling utilities are dropped. The NVIDIA License allows non-commercial research and
 educational use only, and covers the weights (`model_objaverse.ckpt`, read from `data/models/partfield/`) too.
+
+`unimate/` keeps, in upstream's layout, the denoiser of the recommended run (`models/denoiser/`: `base.py`,
+`graph_adaln.py`, `rope.py`, `blocks/`; the full-attention and cross-attention variants are dropped),
+`utils/motion_utils.py` + `utils/rotation_conversions.py` (the 12-dim motion features and their recovery), and from
+`data_process/` the offline rule annotator: `rig_preprocess/annotate.py`, `joint_annotation/` (rule cleaner, structure
+and geometric labels, face-pair resolver, learned vocabulary and reviewed-label lookup with their data files),
+`tools/patch_annotations.py` and `utils/{kinematics,topology}.py`. No training, datasets, Blender export/bake, LLM/VLM
+annotation or rendering: Trivexa builds the cond entry and samples itself (`engines/unimate.py`, after
+`rig_preprocess/pipeline.py`, `utils/motion_features.py`, `dataset/conditioning.py` and `inference/sample.py`).
+Upstream builds on the Motion library (`Quaternions` / `Animation`), which has no license, so `quaternions.py` is
+Trivexa's own implementation of the interface `motion_utils.py` uses (checked against the original to 1e-16).
+Local edits: no `sys.path` setup, `torch_geometric` imported only for the unused GCN embedding, logging instead of
+loguru, and `FACING_EPS` spelled out in `annotate.py`. torchdiffeq (installed) integrates the flow ODE.
+
