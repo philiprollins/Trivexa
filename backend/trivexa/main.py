@@ -25,10 +25,11 @@ from .engines import texture as texturing
 from .engines import meshflow as meshflow_engine
 from .engines import skintokens
 from .engines import texture_upstream
-from .engines import pixal3d, triposg, triposr
+from .engines import partfield, pixal3d, triposg, triposr
 from .engines.meshflow import MeshFlowEngine, MeshFlowParams
 from .engines.gltf_skin import skinned_glb
 from .engines.skintokens import RigParams, SkinTokensEngine
+from .engines.partfield import PartFieldEngine, SegmentParams
 from .engines.multiview import AZIMUTHS, MultiviewEngine, MVParams, adapter_available, prepare_reference
 from .engines.pixal3d import Pixal3DEngine, Pixal3DParams
 from .engines.triposg import TripoSGEngine, TripoSGParams
@@ -50,6 +51,7 @@ tripo_sg = TripoSGEngine()
 pixal = Pixal3DEngine()
 remesher = MeshFlowEngine()
 rigger = SkinTokensEngine()
+segmenter = PartFieldEngine()
 
 
 def _texture_baker() -> tuple[str, str | None]:
@@ -70,7 +72,7 @@ if TEXTURE_BAKER_NOTE:
 
 def _exclusive(keep) -> None:
     """Only one large pipeline on the GPU at a time: unload every engine except `keep`."""
-    for engine in (diffusion, multiview, tripo, tripo_sg, pixal, remesher, rigger):
+    for engine in (diffusion, multiview, tripo, tripo_sg, pixal, remesher, rigger, segmenter):
         if engine is not keep:
             engine.unload()
 
@@ -116,6 +118,8 @@ def _loaded_label() -> str | None:
         return "MeshFlow"
     if rigger.model is not None:
         return "SkinTokens"
+    if segmenter.pvcnn is not None:
+        return "PartField"
     return None
 
 
@@ -146,6 +150,7 @@ def list_models():
             "meshflow": meshflow_engine.available(),
             "meshflow_image": meshflow_engine.image_available(),
             "skintokens": skintokens.available(),
+            "partfield": partfield.available(),
         },
         "texture": {"baker": TEXTURE_BAKER, "note": TEXTURE_BAKER_NOTE},
     }
@@ -592,6 +597,57 @@ def _rig_runner(mesh_path, input_image: Image.Image, half_turn: bool, params: di
         )
         glb = skinned_glb(mesh, rig.joints, rig.parents, rig.names, rig.weights)
         return store.save_model3d(mesh, input_image, params | {"bones": len(rig.joints)}, parent_id, glb=glb)
+
+    return run
+
+
+class SegmentRequest(BaseModel):
+    source_asset: str  # a 3D model asset
+    parts: int = Field(partfield.DETAIL_PARTS["balanced"], ge=2, le=partfield.MAX_PARTS)
+    seed: int = Field(-1, ge=-1, le=2**32 - 1)
+
+
+@app.post("/api/generate/segment")
+async def generate_segment(req: SegmentRequest):
+    source = store.get(req.source_asset)
+    if not source or source["kind"] != "model3d":
+        raise HTTPException(400, "Choose a 3D model to segment")
+    if not partfield.available():
+        raise HTTPException(400, "PartField weights not found (data/models/partfield)")
+    # The mesh the other tools see (TripoSG's decimated one, not model_full.glb): parts keep its UVs and colours.
+    mesh_path = OUTPUTS_DIR / source["model_urls"]["glb"].removeprefix("/files/")
+    input_image = Image.open(OUTPUTS_DIR / source["input_url"].removeprefix("/files/")).copy()
+    sp = source["params"]
+    # Older TripoSR models face -Z: turn them to +Z like everything newer (as remeshing does).
+    half_turn = sp.get("front") != "+z" and sp.get("engine") == "triposr"
+    params = req.model_dump() | {
+        "seed": random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed,
+        "engine": sp.get("engine", "mesh") + " + partfield",
+        "front": "+z",
+        "segmented": True,
+        # a rig does not survive (parts are plain meshes); what it was built on still describes the model
+        **{k: sp[k] for k in ("textured", "remeshed") if sp.get(k)},
+    }
+    job = Job(kind="segment", params=params, run=_segment_runner(mesh_path, input_image, half_turn, params, source["id"]))
+    return {"jobs": [jobs.submit(job).public()]}
+
+
+def _segment_runner(mesh_path, input_image: Image.Image, half_turn: bool, params: dict, parent_id: str):
+    def run(job: Job) -> dict:
+        import numpy as np
+        import trimesh
+
+        _exclusive(segmenter)
+        mesh = trimesh.load(mesh_path, force="mesh")
+        if half_turn:
+            mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [0, 1, 0]))
+        labels = segmenter.generate(
+            SegmentParams(mesh=mesh, parts=params["parts"], seed=params["seed"]),
+            on_step=lambda step, total, preview: jobs.report_step(job, step, total, preview),
+            is_cancelled=job.cancel_requested.is_set,
+        )
+        scene = partfield.split_parts(mesh, labels)
+        return store.save_model3d(scene, input_image, params | {"parts": len(scene.geometry)}, parent_id)
 
     return run
 

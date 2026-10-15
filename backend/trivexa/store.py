@@ -162,7 +162,7 @@ class Store:
 
         `glb` replaces the GLB exported from `mesh` (e.g. one carrying a skin, which the OBJ cannot hold).
         `full_mesh` is the undecimated mesh `mesh` was reduced from, kept as model_full.glb (GLB only: an OBJ of a
-        million faces is ~3x larger).
+        million faces is ~3x larger). `mesh` may also be a trimesh Scene (segmented parts: one node / OBJ object each).
 
         The thumbnail starts as the input image; the UI replaces it with a render of the model (set_thumbnail).
         """
@@ -191,7 +191,8 @@ class Store:
             "input": rel_input.as_posix(),
             "images": rel_images,
         }
-        params = params | {"vertices": len(mesh.vertices), "faces": len(mesh.faces)}
+        geoms = mesh.geometry.values() if hasattr(mesh, "geometry") else [mesh]
+        params = params | {"vertices": sum(len(g.vertices) for g in geoms), "faces": sum(len(g.faces) for g in geoms)}
         return self._insert(asset_id, "model3d", now, files["glb"], rel_thumb, input_image.width, input_image.height,
                             params, parent_id, extra)
 
