@@ -79,6 +79,11 @@ export interface Model3DParams {
   temperature?: number;
   segmented?: boolean; // PartField output: one GLB node / OBJ object per part
   parts?: number;
+  animated?: boolean; // UniMate output: the GLB carries an animation clip
+  caption?: string; // the prompt as UniMate read it ("An object …")
+  frames?: number;
+  fps?: number;
+  joint_labels?: string[];
 }
 
 export type RigStyle = "auto" | "humanoid";
@@ -113,7 +118,7 @@ export type JobStatus = "queued" | "loading" | "running" | "done" | "error" | "c
 
 export interface Job {
   id: string;
-  kind: "image" | "multiview" | "model3d" | "texture" | "remesh" | "rig" | "segment";
+  kind: "image" | "multiview" | "model3d" | "texture" | "remesh" | "rig" | "segment" | "animate";
   params: ImageParams & Partial<MultiviewParams> & Partial<Model3DParams>;
   status: JobStatus;
   step: number;
@@ -188,6 +193,7 @@ export const api = {
         meshflow_image: boolean;
         skintokens: boolean;
         partfield: boolean;
+        unimate: boolean;
       };
       texture: TextureBaker;
     }>("/api/models"),
@@ -245,6 +251,8 @@ export const api = {
     request<{ jobs: Job[] }>("/api/generate/remesh", { method: "POST", body: JSON.stringify(params) }),
   generateRig: (params: { source_asset: string; style: RigStyle; seed: number; count: number; beams: number; temperature: number }) =>
     request<{ jobs: Job[] }>("/api/generate/rig", { method: "POST", body: JSON.stringify(params) }),
+  generateAnimate: (params: { source_asset: string; prompt: string; seed: number; count: number; guidance: number }) =>
+    request<{ jobs: Job[] }>("/api/generate/animate", { method: "POST", body: JSON.stringify(params) }),
   generateSegment: (params: { source_asset: string; parts: number; seed: number }) =>
     request<{ jobs: Job[] }>("/api/generate/segment", { method: "POST", body: JSON.stringify(params) }),
   setThumbnail: (id: string, image: string) =>

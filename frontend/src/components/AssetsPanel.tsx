@@ -155,7 +155,19 @@ const ENGINE_NAMES: Record<string, string> = {
   "mv-adapter": "MV-Adapter texture",
   skintokens: "SkinTokens rig",
   partfield: "PartField segmentation",
+  unimate: "UniMate animation",
 };
+
+/** ["Left Thigh", "Right Thigh", "Bone", "Bone"] -> "Left/Right Thigh, Bone ×2" (the labels UniMate read the rig with) */
+function jointLabelSummary(labels: string[]): string {
+  const counts = new Map<string, number>();
+  for (const label of labels) {
+    const base = label.replace(/^(Left|Right) /, "");
+    const key = base === label ? label : `Left/Right ${base}`;
+    counts.set(key, (counts.get(key) ?? 0) + (base === label ? 1 : 0.5));
+  }
+  return [...counts].map(([k, n]) => (n > 1 ? `${k} ×${Math.ceil(n)}` : k)).join(", ");
+}
 
 /** "triposr + meshflow + mv-adapter" -> "TripoSR + MeshFlow remesh + MV-Adapter texture" */
 const engineLabel = (engine: string | undefined) =>
@@ -167,6 +179,14 @@ function Model3DDetails({ asset }: { asset: Asset }) {
     ["Engine", engineLabel(pr.engine)],
     ...(pr.segmented
       ? ([["Parts", pr.parts ?? "—"]] as [string, string | number][])
+      : pr.animated
+      ? ([
+          ["Motion", pr.prompt ?? "—"],
+          ["Length", pr.frames && pr.fps ? `${(pr.frames / pr.fps).toFixed(1)} s · ${pr.frames} frames` : "—"],
+          ["Bones", pr.bones ?? "—"],
+          ["Guidance", pr.guidance ?? "—"],
+          ["Seed", pr.seed ?? "—"],
+        ] as [string, string | number][])
       : pr.rigged
       ? ([
           ["Skeleton", pr.style === "humanoid" ? "Humanoid" : "Auto"],
@@ -248,6 +268,12 @@ function Model3DDetails({ asset }: { asset: Asset }) {
           </div>
         ))}
       </dl>
+      {pr.joint_labels && (
+        <div className="detail-block">
+          <div className="section-label">Joint labels</div>
+          <p className="detail-text">{jointLabelSummary(pr.joint_labels)}</p>
+        </div>
+      )}
       <div className="detail-block">
         <div className="section-label">Files</div>
         <p className="detail-text mono">{asset.model_urls?.glb.replace("/files/", "")}</p>

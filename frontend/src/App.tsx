@@ -10,6 +10,7 @@ import {
   type Status,
   type TextureBaker,
 } from "./api";
+import { AnimatePanel, type AnimateForm } from "./components/AnimatePanel";
 import { AssetsPanel, type Selection } from "./components/AssetsPanel";
 import { Rail, TopBar, type Tool } from "./components/Chrome";
 import { ImagePanel, SUPPORTED_ARCHS, sizeForArch, type ImageForm } from "./components/ImagePanel";
@@ -92,6 +93,9 @@ const DEFAULT_REMESH_FORM: RemeshForm = {
 // SkinTokens' demo defaults: 10 beams, temperature 1.
 const DEFAULT_RIG_FORM: RigForm = { style: "auto", count: 1, beams: 10, temperature: 1, seed: 0, randomSeed: true };
 
+// UniMate's sampling default: guidance 3.
+const DEFAULT_ANIMATE_FORM: AnimateForm = { prompt: "", count: 1, guidance: 3, seed: 0, randomSeed: true };
+
 const DEFAULT_SEGMENT_FORM: SegmentForm = { detail: "balanced", parts: 10 };
 
 // Defaults from MV-Adapter's texture_i2tex script (CFG 3, 768 px views); 40 steps instead of 50 for speed.
@@ -168,6 +172,9 @@ export default function App() {
   const [skintokensAvailable, setSkintokensAvailable] = useState(false);
   const [rigForm, setRigForm] = usePersistentForm<RigForm>("trivexa.rigForm", DEFAULT_RIG_FORM);
   const [rigModel, setRigModel] = useState<Asset | null>(null);
+  const [unimateAvailable, setUnimateAvailable] = useState(false);
+  const [animateForm, setAnimateForm] = usePersistentForm<AnimateForm>("trivexa.animateForm", DEFAULT_ANIMATE_FORM);
+  const [animateModel, setAnimateModel] = useState<Asset | null>(null);
   const [partfieldAvailable, setPartfieldAvailable] = useState(false);
   const [segmentForm, setSegmentForm] = usePersistentForm<SegmentForm>("trivexa.segmentForm", DEFAULT_SEGMENT_FORM);
   const [segmentModel, setSegmentModel] = useState<Asset | null>(null);
@@ -223,6 +230,7 @@ export default function App() {
       setMeshflowImageAvailable(model3d.meshflow_image);
       setSkintokensAvailable(model3d.skintokens);
       setPartfieldAvailable(model3d.partfield);
+      setUnimateAvailable(model3d.unimate);
       const firstSdxl = checkpoints.find((c) => c.arch === "sdxl")?.id ?? "";
       setMvFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
       setTexFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
@@ -429,6 +437,26 @@ export default function App() {
     }
   };
 
+  const generateAnimate = async () => {
+    if (!animateModel) return;
+    setSubmitting(true);
+    try {
+      const { jobs: created } = await api.generateAnimate({
+        source_asset: animateModel.id,
+        prompt: animateForm.prompt,
+        seed: animateForm.randomSeed ? -1 : animateForm.seed,
+        count: animateForm.count,
+        guidance: animateForm.guidance,
+      });
+      if (created[0]) setSelection({ kind: "job", id: created[0].id });
+      setTab("assets");
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const generateSegment = async () => {
     if (!segmentModel) return;
     setSubmitting(true);
@@ -451,6 +479,11 @@ export default function App() {
   const makeRig = (a: Asset) => {
     setRigModel(a);
     setTool("rig");
+  };
+
+  const makeAnimate = (a: Asset) => {
+    setAnimateModel(a);
+    setTool("animate");
   };
 
   const makeRemesh = (a: Asset) => {
@@ -592,6 +625,17 @@ export default function App() {
             onGenerate={generateSegment}
             submitting={submitting}
           />
+        ) : tool === "animate" ? (
+          <AnimatePanel
+            form={animateForm}
+            setForm={setAnimateForm}
+            model={animateModel}
+            setModel={setAnimateModel}
+            selected={selectedAsset}
+            available={unimateAvailable}
+            onGenerate={generateAnimate}
+            submitting={submitting}
+          />
         ) : tool === "rig" ? (
           <RigPanel
             form={rigForm}
@@ -689,6 +733,7 @@ export default function App() {
           onTexture={makeTexture}
           onRemesh={makeRemesh}
           onRig={makeRig}
+          onAnimate={makeAnimate}
           onSegment={makeSegment}
           onModelSnapshot={saveModelSnapshot}
           notify={notify}

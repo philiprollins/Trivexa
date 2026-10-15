@@ -15,6 +15,10 @@ interface Props {
   skeleton?: boolean;
   /** Rigged models: sway every bone to show how the skin weights deform the mesh. */
   pose?: boolean;
+  /** Animated models: play the GLB's first animation in a loop (paused on its current frame when false). */
+  play?: boolean;
+  /** Animated models: hold the root's horizontal position so travelling motions stay in view. */
+  inPlace?: boolean;
 }
 
 interface PoseBone {
@@ -37,8 +41,8 @@ const PART_COLORS = [
 const PART_MATERIALS = PART_COLORS.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0 }));
 
 /** Orbitable GLB preview: vertex colours, clay, or wireframe-over-clay; segmented models can colour each part, rigged
- * models can show and pose their bones. */
-export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = false, pose = false }: Props) {
+ * models can show and pose their bones, animated ones play their clip. */
+export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = false, pose = false, play = false, inPlace = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const state = useRef<{
     meshes: THREE.Mesh[];
@@ -47,6 +51,8 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
     controls?: OrbitControls;
     helper?: THREE.SkeletonHelper;
     bones: PoseBone[];
+    mixer?: THREE.AnimationMixer;
+    rootTrack?: { track: THREE.VectorKeyframeTrack; travel: Float32Array; held: Float32Array };
   }>({ meshes: [], originals: new Map(), wires: [], bones: [] });
   const snapshotRef = useRef(onSnapshot);
   snapshotRef.current = onSnapshot;
@@ -88,9 +94,12 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
     let frame = 0;
     let posed = false;
     const clock = new THREE.Clock();
+    const animClock = new THREE.Clock(); // its own: getElapsedTime() on the pose clock also advances its delta
     const q = new THREE.Quaternion();
     const loop = () => {
-      const { bones } = state.current;
+      const { bones, mixer } = state.current;
+      const delta = animClock.getDelta();
+      if (mixer && playRef.current) mixer.update(delta);
       if (poseRef.current && bones.length) {
         const t = clock.getElapsedTime() * POSE_SPEED;
         for (const b of bones) b.bone.quaternion.copy(b.rest).multiply(q.setFromAxisAngle(b.axis, POSE_AMPLITUDE * Math.sin(t + b.phase)));
@@ -160,6 +169,26 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
           });
       }
 
+      if (gltf.animations.length) {
+        // Started now, but advanced only from the next frame: the thumbnail below still shows the rest pose.
+        const mixer = new THREE.AnimationMixer(root);
+        const clip = gltf.animations[0];
+        mixer.clipAction(clip).play();
+        state.current.mixer = mixer;
+        // The root's translation track: keep the travelling values and a copy held at the first frame's X/Z.
+        const track = clip.tracks.find((t) => t.name.endsWith(".position")) as THREE.VectorKeyframeTrack | undefined;
+        if (track) {
+          const travel = Float32Array.from(track.values);
+          const held = Float32Array.from(travel);
+          for (let i = 0; i < held.length; i += 3) {
+            held[i] = travel[0];
+            held[i + 2] = travel[2];
+          }
+          state.current.rootTrack = { track, travel, held };
+          track.values.set(inPlaceRef.current ? held : travel);
+        }
+      }
+
       const radius = size.length() / 2;
       const target = new THREE.Vector3(0, size.y / 2, 0);
       controls.target.copy(target);
@@ -198,6 +227,7 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
       renderer.dispose();
       el.removeChild(renderer.domElement);
       state.current.helper?.dispose();
+      state.current.mixer?.stopAllAction();
       state.current = { meshes: [], originals: new Map(), wires: [], bones: [] };
     };
   }, [url]);
@@ -208,6 +238,14 @@ export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = fals
   skeletonRef.current = skeleton;
   const poseRef = useRef(pose);
   poseRef.current = pose;
+  const playRef = useRef(play);
+  playRef.current = play;
+  const inPlaceRef = useRef(inPlace);
+  inPlaceRef.current = inPlace;
+  useEffect(() => {
+    const r = state.current.rootTrack;
+    if (r) r.track.values.set(inPlace ? r.held : r.travel);
+  }, [inPlace]);
   useEffect(() => {
     if (state.current.helper) state.current.helper.visible = skeleton;
   }, [skeleton]);
