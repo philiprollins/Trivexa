@@ -20,6 +20,7 @@ TEXTURE_WEIGHTS_DIR = DATA_DIR / "models" / "texture"  # RealESRGAN + LaMa for t
 MESHFLOW_DIR = DATA_DIR / "models" / "meshflow"  # config.yaml + model.pth (facebook/meshflow)
 SKINTOKENS_DIR = DATA_DIR / "models" / "skintokens"  # experiments/*/…ckpt (VAST-AI/SkinTokens)
 UNIMATE_DIR = DATA_DIR / "models" / "unimate"  # unimate_uniml3d_f60_v3/ (Linzhan/UniMate, CC BY-NC 4.0)
+KIMODO_DIR = DATA_DIR / "models" / "kimodo"  # Kimodo-SOMA-RP-v1.1/ (nvidia, NVIDIA Open Model License)
 TRIPOSG_DIR = DATA_DIR / "models" / "triposg"  # transformer/, vae/, image_encoder_dinov2/ (VAST-AI/TripoSG)
 PARTFIELD_DIR = DATA_DIR / "models" / "partfield"  # model_objaverse.ckpt (nv-tlabs/PartField, NVIDIA non-commercial)
 P3SAM_DIR = DATA_DIR / "models" / "p3sam"  # p3sam/p3sam.safetensors (tencent/Hunyuan3D-Part, not licensed in the EU/UK/KR)

@@ -17,6 +17,7 @@ from huggingface_hub import HfApi, hf_hub_download
 
 from .config import (
     HOLOPART_DIR,
+    KIMODO_DIR,
     MESHFLOW_DIR,
     MV_ADAPTER_DIR,
     P3SAM_DIR,
@@ -44,6 +45,9 @@ HUNYUAN3D_PART_REPO = "tencent/Hunyuan3D-Part"
 HUNYUAN3D_PART_REVISION = "677174466c53571e8bacd5050dff5948734a1a4d"
 HOLOPART_REPO = "VAST-AI/HoloPart"
 HOLOPART_REVISION = "29cdb1417121842c4c4d59b9d283cc734f8c3aec"
+KIMODO_REPO = "nvidia/Kimodo-SOMA-RP-v1.1"
+KIMODO_REVISION = "6c9233af1180b8151e3c4703477104af5dce9dd5"
+KIMODO_SOMA_DIR = KIMODO_DIR / "Kimodo-SOMA-RP-v1.1"
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,19 @@ class UrlFile:
     sha256: str
     filename: str
     dest: Path
+
+# Kimodo's normalisation stats: small non-LFS files, so their checksums are spelled out.
+KIMODO_STATS = tuple(
+    HubFile(KIMODO_REPO, KIMODO_REVISION, f"stats/motion/{name}", KIMODO_SOMA_DIR, sha256)
+    for name, sha256 in {
+        "body/mean.npy": "d42f35f8bb7ef52fdec66ae29c5cf590bd038f4f1aabd2d560d1d0f78663ed6f",
+        "body/std.npy": "965bbad497726ef4e6c46b519827e2cbcb29f974214b25718d20a725b82279ed",
+        "global_root/mean.npy": "6c110980f9a0386e57a8c186f8eac7f55dc05bade92f44c4b391450ada598da1",
+        "global_root/std.npy": "fb15aeed7143f5f0754611f0acf5fa5f55d1f6492a49c23e490fc62f7bf11fb0",
+        "local_root/mean.npy": "4c36e8e33d6d51e6c8206ac796a52b7b3a4da7f0dc49ebdbb4f130178e3e9d31",
+        "local_root/std.npy": "5f57b41f51ced7832cffa81702f6e04d8694e16475c184baec6c8be0e98c8dba",
+    }.items()
+)
 
 
 ITEMS = {
@@ -139,6 +156,19 @@ ITEMS = {
             UNIMATE_DIR,
             "1ffbd379d3667de7d701ed6f3418f1c9d1a66f35d2653776255008c07c051aaa",
         ),
+    ),
+    # Text -> motion on the SOMA human skeleton (NVIDIA Open Model License, commercial use allowed). The LLM2Vec
+    # text encoder is not part of this item yet.
+    "kimodo": (
+        HubFile(KIMODO_REPO, KIMODO_REVISION, "model.safetensors", KIMODO_SOMA_DIR),
+        HubFile(
+            KIMODO_REPO,
+            KIMODO_REVISION,
+            "config.yaml",
+            KIMODO_SOMA_DIR,
+            "905664ad05779b0e28c391b85dc81c9de166418bd5f471ef605f75ab746ce391",
+        ),
+        *KIMODO_STATS,
     ),
     # Mesh part segmentation, two alternatives. PartField (NVIDIA License: non-commercial) predicts a per-face
     # feature field that is clustered into any number of parts; the Objaverse-trained checkpoint is the only one
