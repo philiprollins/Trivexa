@@ -154,6 +154,7 @@ const ENGINE_NAMES: Record<string, string> = {
   meshflow: "MeshFlow remesh",
   "mv-adapter": "MV-Adapter texture",
   skintokens: "SkinTokens rig",
+  partfield: "PartField segmentation",
 };
 
 /** "triposr + meshflow + mv-adapter" -> "TripoSR + MeshFlow remesh + MV-Adapter texture" */
@@ -164,7 +165,9 @@ function Model3DDetails({ asset }: { asset: Asset }) {
   const pr = asset.params;
   const rows: [string, string | number][] = [
     ["Engine", engineLabel(pr.engine)],
-    ...(pr.rigged
+    ...(pr.segmented
+      ? ([["Parts", pr.parts ?? "—"]] as [string, string | number][])
+      : pr.rigged
       ? ([
           ["Skeleton", pr.style === "humanoid" ? "Humanoid" : "Auto"],
           ["Bones", pr.bones ?? "—"],
@@ -194,7 +197,7 @@ function Model3DDetails({ asset }: { asset: Asset }) {
       : []),
     ["Faces", pr.faces?.toLocaleString() ?? "—"],
     ["Vertices", pr.vertices?.toLocaleString() ?? "—"],
-    ...(pr.textured || pr.rigged
+    ...(pr.textured || pr.rigged || pr.segmented
       ? []
       : pr.remeshed
         ? ([

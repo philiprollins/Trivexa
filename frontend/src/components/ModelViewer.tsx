@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-export type RenderMode = "color" | "clay" | "wireframe";
+export type RenderMode = "color" | "parts" | "clay" | "wireframe";
 
 interface Props {
   url: string;
@@ -29,8 +29,15 @@ const POSE_SPEED = 2.2; // radians per second
 
 const CLAY = new THREE.MeshStandardMaterial({ color: 0xb8b8bc, roughness: 0.75, metalness: 0 });
 const WIRE = new THREE.MeshBasicMaterial({ color: 0xffd43b, wireframe: true, transparent: true, opacity: 0.35 });
+// Segmented models: one flat colour per part (mesh), in node order. Distinct hues first, then lighter/darker repeats.
+const PART_COLORS = [
+  0xe6194b, 0x3cb44b, 0xffe119, 0x4363d8, 0xf58231, 0x911eb4, 0x46f0f0, 0xf032e6, 0xbcf60c, 0xfabebe,
+  0x008080, 0xe6beff, 0x9a6324, 0xfffac8, 0x800000, 0xaaffc3, 0x808000, 0xffd8b1, 0x000075, 0x808080,
+];
+const PART_MATERIALS = PART_COLORS.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0 }));
 
-/** Orbitable GLB preview: vertex colours, clay, or wireframe-over-clay; rigged models can show and pose their bones. */
+/** Orbitable GLB preview: vertex colours, clay, or wireframe-over-clay; segmented models can colour each part, rigged
+ * models can show and pose their bones. */
 export function ModelViewer({ url, mode, autoRotate, onSnapshot, skeleton = false, pose = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const state = useRef<{
@@ -216,6 +223,8 @@ function applyMode(
   s: { meshes: THREE.Mesh[]; originals: Map<THREE.Mesh, THREE.Material | THREE.Material[]>; wires: THREE.Mesh[] },
   mode: RenderMode,
 ) {
-  for (const mesh of s.meshes) mesh.material = mode === "color" ? s.originals.get(mesh)! : CLAY;
+  s.meshes.forEach((mesh, i) => {
+    mesh.material = mode === "color" ? s.originals.get(mesh)! : mode === "parts" ? PART_MATERIALS[i % PART_MATERIALS.length] : CLAY;
+  });
   for (const wire of s.wires) wire.visible = mode === "wireframe";
 }

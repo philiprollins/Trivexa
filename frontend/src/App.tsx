@@ -17,6 +17,7 @@ import { Model3DPanel, type Model3DForm, type Source3D } from "./components/Mode
 import { MODE_CFG, MultiviewPanel, type MultiviewForm, type Reference } from "./components/MultiviewPanel";
 import { RemeshPanel, type RemeshForm } from "./components/RemeshPanel";
 import { RigPanel, type RigForm } from "./components/RigPanel";
+import { SegmentPanel, segmentParts, type SegmentForm } from "./components/SegmentPanel";
 import { defaultFrontYaw, TexturePanel, type TextureForm, type TextureReference } from "./components/TexturePanel";
 import { Viewer } from "./components/Viewer";
 import { useJobs } from "./useJobs";
@@ -90,6 +91,8 @@ const DEFAULT_REMESH_FORM: RemeshForm = {
 
 // SkinTokens' demo defaults: 10 beams, temperature 1.
 const DEFAULT_RIG_FORM: RigForm = { style: "auto", count: 1, beams: 10, temperature: 1, seed: 0, randomSeed: true };
+
+const DEFAULT_SEGMENT_FORM: SegmentForm = { detail: "balanced", parts: 10 };
 
 // Defaults from MV-Adapter's texture_i2tex script (CFG 3, 768 px views); 40 steps instead of 50 for speed.
 const DEFAULT_TEXTURE_FORM: TextureForm = {
@@ -165,6 +168,9 @@ export default function App() {
   const [skintokensAvailable, setSkintokensAvailable] = useState(false);
   const [rigForm, setRigForm] = usePersistentForm<RigForm>("trivexa.rigForm", DEFAULT_RIG_FORM);
   const [rigModel, setRigModel] = useState<Asset | null>(null);
+  const [partfieldAvailable, setPartfieldAvailable] = useState(false);
+  const [segmentForm, setSegmentForm] = usePersistentForm<SegmentForm>("trivexa.segmentForm", DEFAULT_SEGMENT_FORM);
+  const [segmentModel, setSegmentModel] = useState<Asset | null>(null);
   const [textureBaker, setTextureBaker] = useState<TextureBaker | null>(null);
   const [texForm, setTexForm, setTexFormState] = usePersistentForm<TextureForm>("trivexa.textureForm", DEFAULT_TEXTURE_FORM);
   const [texModel, setTexModelState] = useState<Asset | null>(null);
@@ -216,6 +222,7 @@ export default function App() {
       setMeshflowAvailable(model3d.meshflow);
       setMeshflowImageAvailable(model3d.meshflow_image);
       setSkintokensAvailable(model3d.skintokens);
+      setPartfieldAvailable(model3d.partfield);
       const firstSdxl = checkpoints.find((c) => c.arch === "sdxl")?.id ?? "";
       setMvFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
       setTexFormState((f) => (checkpoints.some((c) => c.id === f.model && c.arch === "sdxl") ? f : { ...f, model: firstSdxl }));
@@ -422,6 +429,25 @@ export default function App() {
     }
   };
 
+  const generateSegment = async () => {
+    if (!segmentModel) return;
+    setSubmitting(true);
+    try {
+      const { jobs: created } = await api.generateSegment({ source_asset: segmentModel.id, parts: segmentParts(segmentForm), seed: -1 });
+      if (created[0]) setSelection({ kind: "job", id: created[0].id });
+      setTab("assets");
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const makeSegment = (a: Asset) => {
+    setSegmentModel(a);
+    setTool("segment");
+  };
+
   const makeRig = (a: Asset) => {
     setRigModel(a);
     setTool("rig");
@@ -555,7 +581,18 @@ export default function App() {
       />
       <div className="workspace">
         <Rail active={tool} onSelect={setTool} />
-        {tool === "rig" ? (
+        {tool === "segment" ? (
+          <SegmentPanel
+            form={segmentForm}
+            setForm={setSegmentForm}
+            model={segmentModel}
+            setModel={setSegmentModel}
+            selected={selectedAsset}
+            available={partfieldAvailable}
+            onGenerate={generateSegment}
+            submitting={submitting}
+          />
+        ) : tool === "rig" ? (
           <RigPanel
             form={rigForm}
             setForm={setRigForm}
@@ -652,6 +689,7 @@ export default function App() {
           onTexture={makeTexture}
           onRemesh={makeRemesh}
           onRig={makeRig}
+          onSegment={makeSegment}
           onModelSnapshot={saveModelSnapshot}
           notify={notify}
         />

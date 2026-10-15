@@ -77,6 +77,8 @@ export interface Model3DParams {
   style?: RigStyle;
   beams?: number;
   temperature?: number;
+  segmented?: boolean; // PartField output: one GLB node / OBJ object per part
+  parts?: number;
 }
 
 export type RigStyle = "auto" | "humanoid";
@@ -111,7 +113,7 @@ export type JobStatus = "queued" | "loading" | "running" | "done" | "error" | "c
 
 export interface Job {
   id: string;
-  kind: "image" | "multiview" | "model3d" | "texture" | "remesh" | "rig";
+  kind: "image" | "multiview" | "model3d" | "texture" | "remesh" | "rig" | "segment";
   params: ImageParams & Partial<MultiviewParams> & Partial<Model3DParams>;
   status: JobStatus;
   step: number;
@@ -185,6 +187,7 @@ export const api = {
         meshflow: boolean;
         meshflow_image: boolean;
         skintokens: boolean;
+        partfield: boolean;
       };
       texture: TextureBaker;
     }>("/api/models"),
@@ -242,6 +245,8 @@ export const api = {
     request<{ jobs: Job[] }>("/api/generate/remesh", { method: "POST", body: JSON.stringify(params) }),
   generateRig: (params: { source_asset: string; style: RigStyle; seed: number; count: number; beams: number; temperature: number }) =>
     request<{ jobs: Job[] }>("/api/generate/rig", { method: "POST", body: JSON.stringify(params) }),
+  generateSegment: (params: { source_asset: string; parts: number; seed: number }) =>
+    request<{ jobs: Job[] }>("/api/generate/segment", { method: "POST", body: JSON.stringify(params) }),
   setThumbnail: (id: string, image: string) =>
     request<Asset>(`/api/assets/${id}/thumbnail`, { method: "POST", body: JSON.stringify({ image }) }),
   cancelJob: (id: string) => request(`/api/jobs/${id}/cancel`, { method: "POST" }),

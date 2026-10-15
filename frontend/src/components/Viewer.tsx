@@ -1,5 +1,5 @@
-import { Bone, Box, Copy, Download, ExternalLink, Layers, PaintBucket, PersonStanding, Pyramid, RotateCcw, Rotate3d, Star, Trash2, X } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { Bone, Box, Copy, Download, ExternalLink, Layers, PaintBucket, PersonStanding, Puzzle, Pyramid, RotateCcw, Rotate3d, Star, Trash2, X } from "lucide-react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { Asset, Job } from "../api";
 import { Segmented } from "./controls";
 import { Logo } from "./Logo";
@@ -21,6 +21,7 @@ interface Props {
   onTexture: (a: Asset) => void;
   onRemesh: (a: Asset) => void;
   onRig: (a: Asset) => void;
+  onSegment: (a: Asset) => void;
   onModelSnapshot: (a: Asset, dataUrl: string) => void;
   notify: (msg: string) => void;
 }
@@ -28,18 +29,25 @@ interface Props {
 const VIEW_NAMES: Record<number, string> = { 0: "Front", 90: "Right", 180: "Back", 270: "Left" };
 
 const modelLabel = (p: Asset["params"]) =>
-  p.rigged ? `Rigged model · ${p.bones} bones` : p.textured ? "Textured model" : p.remeshed ? "Remeshed model" : "3D model";
+  p.segmented
+    ? `Segmented model · ${p.parts} parts`
+    : p.rigged ? `Rigged model · ${p.bones} bones` : p.textured ? "Textured model" : p.remeshed ? "Remeshed model" : "3D model";
 
 export function Viewer(props: Props) {
-  const { asset, job, queuePosition, onCancel, onToggleFavorite, onDelete, onReuse, onMakeMultiview, onMake3D, onTexture, onRemesh, onRig, notify } = props;
+  const { asset, job, queuePosition, onCancel, onToggleFavorite, onDelete, onReuse, onMakeMultiview, onMake3D, onTexture, onRemesh, onRig, onSegment, notify } = props;
   const [renderMode, setRenderMode] = useState<RenderMode>("color");
   const [autoRotate, setAutoRotate] = useState(true);
   const [showBones, setShowBones] = useState(true);
   const [posing, setPosing] = useState(false);
+  // A segmented model opens on its parts; other models fall back to Color if Parts was left on.
+  const segmented = !!asset?.params.segmented;
+  useEffect(() => {
+    if (segmented) setRenderMode("parts");
+  }, [asset?.id, segmented]);
 
   if (job && job.status !== "done") {
     const [width, height] =
-      job.kind === "multiview" || job.kind === "texture" ? [3, 2] : job.kind === "model3d" || job.kind === "remesh" || job.kind === "rig" ? [1, 1] : [job.params.width, job.params.height];
+      job.kind === "multiview" || job.kind === "texture" ? [3, 2] : job.kind === "model3d" || job.kind === "remesh" || job.kind === "rig" || job.kind === "segment" ? [1, 1] : [job.params.width, job.params.height];
     const pct = job.total ? Math.round((job.step / job.total) * 100) : 0;
     return (
       <main className="viewer">
@@ -49,13 +57,15 @@ export function Viewer(props: Props) {
             <div className="pending-overlay">
               {job.status === "queued" && <span>Queued{queuePosition > 0 ? ` · #${queuePosition}` : ""}</span>}
               {job.status === "loading" && (
-                <span>{{ image: "Loading model…", texture: "Unwrapping UVs & preparing…", remesh: "Loading MeshFlow…", rig: "Loading SkinTokens…" }[job.kind as string] ?? "Preparing…"}</span>
+                <span>{{ image: "Loading model…", texture: "Unwrapping UVs & preparing…", remesh: "Loading MeshFlow…", rig: "Loading SkinTokens…", segment: "Loading PartField…" }[job.kind as string] ?? "Preparing…"}</span>
               )}
               {job.status === "running" && (
                 <span>{job.kind === "model3d"
                     ? ["Encoding image…", "Extracting mesh…", "Saving…"][job.step - 1]
                     : job.kind === "rig"
                     ? `${job.step < 40 ? "Predicting skeleton" : "Predicting skin weights"} · ${job.step}%`
+                    : job.kind === "segment"
+                    ? job.step < 40 ? "Predicting part features…" : "Clustering parts…"
                     : `Step ${job.step} / ${job.total}`}</span>
               )}
               {job.status === "error" && <span className="error-text">Failed: {job.error}</span>}
@@ -76,6 +86,8 @@ export function Viewer(props: Props) {
               ? "Remeshing 3D model"
               : job.kind === "rig"
               ? "Rigging 3D model"
+              : job.kind === "segment"
+              ? "Segmenting 3D model"
               : job.params.prompt || (job.kind === "multiview" ? "Multiview from image" : job.kind === "model3d" ? "3D model from image" : "")}
           </p>
           {(job.status === "queued" || job.status === "loading" || job.status === "running") && (
@@ -117,7 +129,7 @@ export function Viewer(props: Props) {
             <Suspense fallback={null}>
               <ModelViewer
                 url={asset.model_urls.glb}
-                mode={renderMode}
+                mode={renderMode === "parts" && !asset.params.segmented ? "color" : renderMode}
                 autoRotate={autoRotate}
                 skeleton={!!asset.params.rigged && showBones}
                 pose={!!asset.params.rigged && posing}
@@ -128,10 +140,11 @@ export function Viewer(props: Props) {
               <Segmented
                 options={[
                   { value: "color", label: "Color" },
+                  ...(asset.params.segmented ? [{ value: "parts" as const, label: "Parts" }] : []),
                   { value: "clay", label: "Clay" },
                   { value: "wireframe", label: "Wire" },
                 ]}
-                value={renderMode}
+                value={renderMode === "parts" && !asset.params.segmented ? "color" : renderMode}
                 onChange={setRenderMode}
               />
               <button
@@ -211,6 +224,11 @@ export function Viewer(props: Props) {
             </button>
           )}
           {asset.kind === "model3d" && (
+            <button className="tool-btn" onClick={() => onSegment(asset)} title="Split into parts (PartField)">
+              <Puzzle size={15} /> Segment
+            </button>
+          )}
+          {asset.kind === "model3d" && (
             <button className="tool-btn" onClick={() => onRemesh(asset)} title="Rebuild as a clean low-poly mesh (MeshFlow)">
               <Pyramid size={15} /> Remesh
             </button>
@@ -232,7 +250,7 @@ export function Viewer(props: Props) {
           )}
           {asset.kind === "model3d" && asset.model_urls ? (
             <>
-              <a className="tool-btn" href={asset.model_urls.glb} download title={`Download GLB (${asset.params.textured ? "textured" : "vertex colours"}${asset.params.rigged ? ", rigged" : ""})`}>
+              <a className="tool-btn" href={asset.model_urls.glb} download title={`Download GLB (${asset.params.textured ? "textured" : "vertex colours"}${asset.params.rigged ? ", rigged" : ""}${asset.params.segmented ? ", one mesh per part" : ""})`}>
                 <Download size={15} /> GLB
               </a>
               {asset.model_urls.glb_full && (
