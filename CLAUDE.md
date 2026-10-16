@@ -47,7 +47,7 @@ From `~/ComfyUI/models` (architecture is detected from safetensors headers, not 
 | Hidden (not image models) | `ace_step*`, `stable-audio-open-1.0`, `yue2_3b_int8_convrot` (audio) |
 | Background removal | `background_removal/birefnet.safetensors` (= ZhengPeng7/BiRefNet) |
 | Image → 3D | `triposr/` (`config.yaml`, `model.ckpt`, `dino/config.json` = stabilityai/TripoSR) |
-| Image → textured 3D | `TencentARC/Pixal3D/` (`pipeline.json` + `ckpts/`, single-image set; the `*_mv` checkpoints aren't used) |
+| Image → textured 3D | `TencentARC/Pixal3D/` (`pipeline.json` + `ckpts/`; the four `*_mv` flow checkpoints serve multiview input) |
 | Pixal3D image encoder | `clip_vision/dino_v3_L_naf_fp32.safetensors` (DINOv3 ViT-L/16, transformers-4 key names, + `naf.*` NAF upsampler) |
 | Pixal3D camera FOV | `geometry_estimation/moge_2_vitl_normal_fp16.safetensors` (MoGe-2 ViT-L normal; no config inside) |
 
@@ -74,7 +74,7 @@ Pixal3D's vendored code is TRELLIS.2's, so it would be a small step from there. 
 ## Built so far
 
 Image tool (SDXL + SD 1.5, long-prompt chunking, live x0 previews, cancel) → Multiview tool (MV-Adapter t2mv/i2mv,
-6 views at 768 px) → 3D Model tool (TripoSG by default, Pixal3D for shape + PBR texture in one pass, or TripoSR; orbit viewer with colour/clay/wire, GLB/OBJ) → Segment tool (PartField,
+6 views at 768 px) → 3D Model tool (TripoSG by default, Pixal3D for shape + PBR texture in one pass, from one image or several views of a multiview set, or TripoSR; orbit viewer with colour/clay/wire, GLB/OBJ) → Segment tool (PartField,
 model → N parts, one GLB node / OBJ object each, keeping colours or texture; the viewer's "Parts" mode colours them) → Remesh tool (MeshFlow,
 dense mesh → ~1k-face artist-style mesh, colours transferred as vertex colours) → Texture tool (ig2mv or tg2mv
 views baked into a UV texture by MV-Adapter's own pipeline, with Trivexa's lean baker as a fallback) → Rig tool (SkinTokens,
@@ -126,6 +126,15 @@ anything else resident.
   seeded once, as upstream. Images are cropped/flattened on **black** (upstream's preprocess). Output is a PBR
   `trimesh` turned to Y-up facing +Z (upstream's own final rotation faces −Z); `params.textured`, `fov_used`,
   `resolution_used`. Texture/Remesh/Rig accept it like any model.
+  **Multi-view** (`Pixal3DParams.views`, API `source_views`: azimuths of a multiview set, front included): upstream's
+  `inference_mv.py` path. The four flow models are swapped for the `*_mv` fine-tunes (`_swap_flows`, ~50 s; the
+  decoders are shared, and the missing `ss_flow…_mv.json` falls back to the identical single-view config).
+  `DinoV3ProjMultiViewFeatureExtractor` projects each view through `calc_mat_i = F·C₀⁻¹·Cᵢ` and averages them.
+  MV-Adapter's orbit already is upstream's rig (Z-up, front camera on −Y, azimuth 90 on +X, unit cube at 1/1.1 of
+  the frame), so views are cut out with BiRefNet, kept uncropped, and given perspective cameras at 20° FOV
+  (`orbit_cameras`, distance 3.119; MV-Adapter is orthographic, which the narrow FOV approximates). MoGe isn't used.
+  Four views at 1536 ~150 s, peak ~10.6 GB (six views at 1024 ~10.3 GB); the side profile follows the side views
+  instead of being guessed.
 - `meshflow.py` — MeshFlow DiT + MeshVAE decoder, optionally guided by a reference image encoded with DINOv3
   ViT-L/16 (built locally instead of via torch.hub; CFG 2.5 on the image condition, ~10 s; shape-only ~5 s, no CFG).
   The image is cut out with BiRefNet and flattened on white (`prepare_reference(..., background=1.0)`). The checkpoint
