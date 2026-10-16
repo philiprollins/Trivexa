@@ -63,7 +63,9 @@ the flow models in system RAM between stages. `image_cond.py` is `DinoV3ProjFeat
 utilities from `trainers/flow_matching/mixins/image_conditioned_proj.py`, changed to share one DINOv3 and one NAF
 across the four stages (upstream loads DINOv3 per stage and NAF through torch.hub), to iterate DINOv3's blocks where
 transformers 5 keeps them, and to project only the occupied voxels instead of the whole grid (the same features; at
-1536 the full 96^3 grid alone needs 7 GB). Local edits: attention defaults to PyTorch SDPA instead of flash-attn.
+1536 the full 96^3 grid alone needs 7 GB). It also has the multi-view `DinoV3ProjMultiViewFeatureExtractor`,
+`ProjGridMV` and `compute_relative_calc_mat` (for `inference_mv.py`'s cascade), with only the "average" fusion that
+script uses. Local edits: attention defaults to PyTorch SDPA instead of flash-attn.
 The compiled TRELLIS.2 libraries (FlexGEMM, CuMesh, o-voxel) are installed by the `pixal3d` extra, not vendored.
 Weights (`TencentARC/Pixal3D`, MIT, but not offered in the EU) are read from `<models dir>/TencentARC/Pixal3D/`.
 
