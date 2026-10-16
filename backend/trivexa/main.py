@@ -115,7 +115,7 @@ def _loaded_label() -> str | None:
     if tripo_sg.transformer is not None:
         return "TripoSG"
     if pixal.models is not None:
-        return "Pixal3D"
+        return "Pixal3D multi-view" if pixal.multiview else "Pixal3D"
     if remesher.pipe is not None:
         return "MeshFlow"
     if rigger.model is not None:
@@ -151,6 +151,8 @@ def list_models():
             "triposg": triposg.available(),
             "pixal3d": PIXAL3D_NOTE is None,
             "pixal3d_note": PIXAL3D_NOTE,
+            "pixal3d_mv": PIXAL3D_MV_NOTE is None,
+            "pixal3d_mv_note": PIXAL3D_MV_NOTE,
             "meshflow": meshflow_engine.available(),
             "meshflow_image": meshflow_engine.image_available(),
             "skintokens": skintokens.available(),
@@ -351,6 +353,8 @@ def _multiview_runner(model_path, params: dict, source: Image.Image | None, pare
 class Model3DRequest(BaseModel):
     source_asset: str | None = None
     source_view: int = 0  # azimuth, when the source is a multiview set
+    # Pixal3D only: several azimuths of a multiview set (0 among them) to condition on together
+    source_views: list[int] | None = Field(None, max_length=8)
     source_image: str | None = Field(None, max_length=40_000_000)
     remove_bg: bool = True
     engine: Literal["triposr", "triposg", "pixal3d"] = "triposr"
@@ -378,6 +382,7 @@ _MODEL3D_FIELDS = {
 }
 _MODEL3D_DEFAULTS = {"triposg": {"steps": 50, "guidance": 7.0}, "pixal3d": {"steps": 12, "guidance": 7.5}}
 PIXAL3D_NOTE = pixal3d.unavailable_reason()
+PIXAL3D_MV_NOTE = pixal3d.mv_unavailable_reason()
 
 
 @app.post("/api/generate/3d")
@@ -390,24 +395,42 @@ async def generate_3d(req: Model3DRequest):
         raise HTTPException(400, f"Pixal3D unavailable: {PIXAL3D_NOTE}")
     if req.remove_bg and not bg_remover.available():
         raise HTTPException(400, "Background removal weights (birefnet.safetensors) not found")
-    source, parent_id = _load_source_image(req.source_asset, req.source_image, req.source_view)
+    views = None
+    if req.source_views is not None:
+        # The front is the main view every other one is placed relative to, so it comes first.
+        azimuths = sorted({a % 360 for a in req.source_views})
+        if req.engine != "pixal3d":
+            raise HTTPException(400, "Only Pixal3D takes several views")
+        if PIXAL3D_MV_NOTE:
+            raise HTTPException(400, f"Multi-view Pixal3D unavailable: {PIXAL3D_MV_NOTE}")
+        if not req.source_asset or 0 not in azimuths or len(azimuths) < 2:
+            raise HTTPException(400, "Choose a multiview set and at least two of its views, the front among them")
+        views = [(a, _load_source_image(req.source_asset, None, a)[0]) for a in azimuths]
+        source, parent_id = views[0][1], req.source_asset
+    else:
+        source, parent_id = _load_source_image(req.source_asset, req.source_image, req.source_view)
     # "front" records which way the mesh faces; older TripoSR models (before it was set) face -Z.
     params = req.model_dump(include={"source_asset", "source_view", "remove_bg", *_MODEL3D_FIELDS[req.engine]})
+    if views:
+        params["source_views"] = [a for a, _ in views]
+        params.pop("source_view", None)
     params |= {"engine": req.engine, "front": "+z"}
     for k, v in _MODEL3D_DEFAULTS.get(req.engine, {}).items():
         if params.get(k) is None:
             params[k] = v
     if req.engine in ("triposg", "pixal3d"):
         params["seed"] = random.randint(0, 2**32 - 1) if req.seed == -1 else req.seed
-    job = Job(kind="model3d", params=params, run=_model3d_runner(params, source, parent_id))
+    job = Job(kind="model3d", params=params, run=_model3d_runner(params, source, parent_id, views))
     return {"jobs": [jobs.submit(job).public()]}
 
 
-def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
+def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None, views: list | None = None):
     def run(job: Job) -> dict:
         engine = {"triposg": tripo_sg, "pixal3d": pixal}.get(params["engine"], tripo)
         _exclusive(engine)
         image = bg_remover.remove(source) if params["remove_bg"] else source
+        if views and params["remove_bg"]:
+            views[:] = [(a, image if a == 0 else bg_remover.remove(v)) for a, v in views]
         on_step = lambda step, total, preview: jobs.report_step(job, step, total, preview)  # noqa: E731
         full = None
         if engine is pixal:
@@ -421,6 +444,7 @@ def _model3d_runner(params: dict, source: Image.Image, parent_id: str | None):
                     fov=params["fov"] or None,
                     faces=params["face_limit"] or 1_000_000,
                     texture_size=params["texture_size"],
+                    views=views,
                 ),
                 on_step=on_step,
                 is_cancelled=job.cancel_requested.is_set,
