@@ -7,6 +7,12 @@ mesh is remeshed, UV-unwrapped and its PBR attributes baked into textures by o-v
 
 Every stage runs one 1.3B flow model, so the models wait in system RAM (~14 GB) and only the active one is moved to
 the GPU, as upstream's low-VRAM mode does.
+
+Given several posed views instead (inference_mv.py), the same cascade runs with upstream's multi-view flow models
+(`ckpts/*_mv`, swapped in for the four single-view ones): every view's features are projected onto the grid through
+its own camera and the views are averaged. Trivexa's views come from MV-Adapter, whose orbit (Z-up, front camera on
+-Y, azimuth 90 on +X, elevation 0, the unit cube spanning 1/1.1 of an orthographic frame) is upstream's example rig
+but for the projection, so they are given a narrow perspective FOV and used uncropped.
 """
 
 import gc
@@ -37,6 +43,15 @@ _MODELS = (
     "tex_slat_flow_model_1024",
     "tex_slat_decoder",
 )
+# Flow models replaced by their "_mv" fine-tunes for multi-view input (pipeline_mv.json; decoders are shared)
+_MV_FLOWS = (
+    "sparse_structure_flow_model",
+    "shape_slat_flow_model_512",
+    "shape_slat_flow_model_1024",
+    "tex_slat_flow_model_1024",
+)
+MV_FOV = 20.0  # degrees; upstream's example rig, "for rig renders and most multi-view generators"
+_MV_PAD = 1.1  # the unit cube spans 1/1.1 of each view, as in the rig (and MV-Adapter's ortho frame of +-0.55)
 # inference.py's IMAGE_COND_CONFIGS: (image size, projection grid resolution, NAF output size or None)
 _COND = {
     "ss": (512, 16, None),
@@ -81,7 +96,10 @@ class Pixal3DParams:
     resolution: int = 1536  # 1024 or 1536 (upstream's default; "1536_cascade")
     steps: int = 12  # per sampling stage (structure, shape 512, shape HR, texture)
     guidance: float = 7.5  # structure and shape stages; texture stays at upstream's 1.0
-    fov: float | None = None  # horizontal camera FOV in degrees; None estimates it with MoGe-2
+    fov: float | None = None  # horizontal camera FOV in degrees; None estimates it with MoGe-2 (or MV_FOV for views)
+    # Multi-view input instead of `image`: (azimuth in degrees, view) on an elevation-0 orbit, the first being the
+    # front (azimuth 0). Views are RGBA (or RGB already on black) and used as framed, not cropped.
+    views: list[tuple[float, Image.Image]] | None = None
     faces: int = 500_000  # decimation target after remeshing
     texture_size: int = 2048
 
@@ -110,6 +128,26 @@ def available() -> bool:
     return unavailable_reason() is None
 
 
+def _mv_files(name: str, spec: dict) -> tuple:
+    """(config, weights) of a flow model's multi-view fine-tune. The architecture is the single-view one, so its
+    config stands in when the "_mv" copy is missing (upstream has one for every model, identical)."""
+    base = PIXAL3D_DIR / spec[name]
+    config = base.with_name(base.name + "_mv.json")
+    return (config if config.is_file() else base.with_name(base.name + ".json")), base.with_name(base.name + "_mv.safetensors")
+
+
+def mv_unavailable_reason() -> str | None:
+    """Why multi-view Pixal3D can't run, or None."""
+    reason = unavailable_reason()
+    if reason:
+        return reason
+    spec = json.loads((PIXAL3D_DIR / "pipeline.json").read_text())["args"]["models"]
+    missing = [w for _, w in (_mv_files(name, spec) for name in _MV_FLOWS) if not w.is_file()]
+    if missing:
+        return "multi-view weights not found: " + ", ".join(str(p) for p in missing[:2])
+    return None
+
+
 def prepare_input(image: Image.Image) -> Image.Image:
     """Upstream's preprocess_image for an image that already has its alpha: at most 1024 px, cropped to a square
     1.1x the subject's bounding box (alpha > 0.8) and flattened onto black."""
@@ -128,6 +166,43 @@ def prepare_input(image: Image.Image) -> Image.Image:
     rgba = np.array(image).astype(np.float32) / 255
     rgb = rgba[:, :, :3] * rgba[:, :, 3:4]  # black background
     return Image.fromarray((np.clip(rgb, 0, 1) * 255).astype(np.uint8))
+
+
+def prepare_view(image: Image.Image) -> Image.Image:
+    """A multi-view input as upstream's load_views reads it: alpha kept (premultiplied onto black after resizing,
+    see _view_tensor), never cropped or rescaled, since the camera describes the framing as given."""
+    if image.mode == "RGBA":
+        return image
+    return image.convert("RGB").convert("RGBA")  # no mask: used as-is (it should already be on black)
+
+
+def _view_tensor(image: Image.Image, size: int) -> torch.Tensor:
+    """inference_mv.py's to_cond_tensor: LANCZOS resize, then premultiply by alpha so the background is black."""
+    image = image.resize((size, size), Image.Resampling.LANCZOS)
+    alpha = torch.from_numpy(np.array(image.getchannel(3))).float() / 255
+    rgb = torch.from_numpy(np.array(image.convert("RGB"))).permute(2, 0, 1).float() / 255
+    return rgb * alpha
+
+
+def orbit_cameras(azimuths: list[float], fov: float) -> dict:
+    """Camera-to-world matrices (Blender/NeRF: Z-up world, cameras look down their -Z with +Y up) for an
+    elevation-0 orbit around the origin, azimuth 0 at (0, -d, 0) as transforms.json's example rig; `fov` in
+    radians. The distance puts the unit cube at 1/1.1 of the frame (3.119 at 20 degrees, as the rig)."""
+    distance = _MV_PAD * 0.5 / math.tan(fov / 2)
+    az = torch.deg2rad(torch.tensor(azimuths, dtype=torch.float32))
+    back = torch.stack([torch.sin(az), -torch.cos(az), torch.zeros_like(az)], dim=-1)  # camera +Z, toward it
+    right = torch.stack([torch.cos(az), torch.sin(az), torch.zeros_like(az)], dim=-1)
+    up = torch.tensor([0.0, 0.0, 1.0]).expand_as(back)
+    c2w = torch.eye(4).repeat(len(azimuths), 1, 1)
+    c2w[:, :3, :3] = torch.stack([right, up, back], dim=-1)
+    c2w[:, :3, 3] = back * distance
+    n = len(azimuths)
+    return {
+        "transform_matrix": c2w[None],  # [1, V, 4, 4]
+        "camera_angle_x": torch.full((1, n), fov),
+        "distance": torch.full((1, n), distance),
+        "mesh_scale": torch.ones(1),
+    }
 
 
 def camera_from_fov(camera_angle_x: float, mesh_scale: float = 1.0, image_resolution: int = 512) -> dict:
@@ -163,23 +238,30 @@ class Pixal3DEngine:
         self.spec: dict | None = None  # pipeline.json "args"
         self.dino = self.naf = self.moge = None
         self.cond: dict | None = None  # stage -> DinoV3ProjFeatureExtractor (sharing dino and naf)
+        self.cond_mv: dict | None = None  # stage -> DinoV3ProjMultiViewFeatureExtractor (sharing them too)
+        self.multiview = False  # whether the flow models in self.models are the "_mv" fine-tunes
 
-    def load(self) -> None:
+    def load(self, multiview: bool = False) -> None:
         if self.models is not None:
+            if self.multiview != multiview:
+                self._swap_flows(multiview)
             return
         from transformers import DINOv3ViTConfig, DINOv3ViTModel
 
         from ..vendor.moge.model.v2 import MoGeModel
         from ..vendor.naf.naf import NAF
         from ..vendor.pixal3d import models as p3d_models
-        from ..vendor.pixal3d.image_cond import DinoV3ProjFeatureExtractor
+        from ..vendor.pixal3d.image_cond import DinoV3ProjFeatureExtractor, DinoV3ProjMultiViewFeatureExtractor
 
         log.info("Loading Pixal3D from %s", PIXAL3D_DIR)
         with open(PIXAL3D_DIR / "pipeline.json") as f:
             self.spec = json.load(f)["args"]
         models = {}
         for name in _MODELS:
-            models[name] = p3d_models.from_pretrained(str(PIXAL3D_DIR / self.spec["models"][name])).eval()
+            if multiview and name in _MV_FLOWS:
+                models[name] = self._load_mv_flow(name)
+            else:
+                models[name] = p3d_models.from_pretrained(str(PIXAL3D_DIR / self.spec["models"][name])).eval()
             gc.collect()
 
         weights = load_file(DINOV3_NAF_PATH)
@@ -203,12 +285,42 @@ class Pixal3DEngine:
                                               use_naf_upsample=naf_size is not None, naf_target_size=naf_size)
             for stage, (size, grid, naf_size) in _COND.items()
         }
+        self.cond_mv = {
+            stage: DinoV3ProjMultiViewFeatureExtractor(dino, naf, image_size=size, grid_resolution=grid,
+                                                       use_naf_upsample=naf_size is not None, naf_target_size=naf_size)
+            for stage, (size, grid, naf_size) in _COND.items()
+        }
         self.models, self.dino, self.naf, self.moge = models, dino, naf, moge
+        self.multiview = multiview
+
+    def _load_mv_flow(self, name: str):
+        from ..vendor.pixal3d import models as p3d_models
+
+        config_path, weights_path = _mv_files(name, self.spec["models"])
+        config = json.loads(config_path.read_text())
+        model = getattr(p3d_models, config["name"])(**config["args"])
+        model.load_state_dict(load_file(weights_path), strict=True)
+        return model.eval()
+
+    def _swap_flows(self, multiview: bool) -> None:
+        """Replace the four flow models with the other variant (~5 GB each, so one at a time)."""
+        from ..vendor.pixal3d import models as p3d_models
+
+        log.info("Loading Pixal3D %s flow models", "multi-view" if multiview else "single-view")
+        for name in _MV_FLOWS:
+            self.models[name] = None
+            gc.collect()
+            if multiview:
+                self.models[name] = self._load_mv_flow(name)
+            else:
+                self.models[name] = p3d_models.from_pretrained(str(PIXAL3D_DIR / self.spec["models"][name])).eval()
+        gc.collect()
+        self.multiview = multiview
 
     def unload(self) -> None:
         if self.models is None:
             return
-        self.models = self.spec = self.dino = self.naf = self.moge = self.cond = None
+        self.models = self.spec = self.dino = self.naf = self.moge = self.cond = self.cond_mv = None
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -262,6 +374,34 @@ class Pixal3DEngine:
             "neg_cond": {"global": torch.zeros_like(z_global), "proj": neg_proj},
         }
 
+    def _proj_cond_mv(self, stage: str, views: dict, coords: torch.Tensor | None = None,
+                      grid_resolution: int | None = None) -> dict:
+        """Pixal3DMVImageTo3DPipeline's get_proj_cond_ss / get_proj_cond_shape: views averaged on the grid."""
+        from ..vendor.pixal3d.image_cond import ProjGridMV
+        from ..vendor.pixal3d.modules.sparse import SparseTensor
+
+        extractor = self.cond_mv[stage]
+        default_grid = extractor.proj_grid
+        if grid_resolution is not None and grid_resolution != extractor.grid_resolution:
+            extractor.proj_grid = ProjGridMV(grid_resolution=grid_resolution, image_resolution=default_grid.image_resolution)
+        grid = extractor.proj_grid.grid_resolution
+        cams = {k: v.to(self.device) for k, v in views["camera"].items()}
+        index = None if coords is None else (coords[:, 1].long() * grid + coords[:, 2].long()) * grid + coords[:, 3].long()
+        try:
+            z_global, z_proj = extractor(views["images"][extractor.image_size].to(self.device), **cams, point_index=index)
+        finally:
+            extractor.proj_grid = default_grid
+        if coords is None:
+            proj, neg_proj = z_proj, torch.zeros_like(z_proj)
+        else:
+            feats = z_proj[0]
+            proj = SparseTensor(feats=feats, coords=coords)
+            neg_proj = SparseTensor(feats=torch.zeros_like(feats), coords=coords)
+        return {
+            "cond": {"global": z_global, "proj": proj},
+            "neg_cond": {"global": torch.zeros_like(z_global), "proj": neg_proj},
+        }
+
     def _sample(self, which: str, model, noise, cond: dict, p: Pixal3DParams, sampler, **extra):
         spec = self.spec[f"{which}_sampler"]
         params = dict(spec["params"], steps=p.steps)
@@ -277,15 +417,23 @@ class Pixal3DEngine:
         on_step: Callable[[int, int, str | None], None],
         is_cancelled: Callable[[], bool],
     ) -> tuple[trimesh.Trimesh, Image.Image, dict]:
-        """Return the textured mesh (Y-up, facing +Z), the prepared input image, and facts worth recording
-        (the FOV used and the resolution the cascade ran at)."""
+        """Return the textured mesh (Y-up, facing +Z), the prepared input image (the front view, for multi-view
+        input), and facts worth recording (the FOV used and the resolution the cascade ran at)."""
         import o_voxel
 
         from ..vendor.pixal3d.modules.sparse import SparseTensor
         from ..vendor.pixal3d.representations import MeshWithVoxel
 
-        self.load()
-        image = prepare_input(p.image)
+        multiview = bool(p.views)
+        if multiview and p.views[0][0] % 360 != 0:
+            raise ValueError("The first view must be the front (azimuth 0)")
+        self.load(multiview)
+        if multiview:
+            rgba = [prepare_view(v) for _, v in p.views]
+            front = rgba[0]
+            image = Image.composite(front.convert("RGB"), Image.new("RGB", front.size), front.getchannel(3))
+        else:
+            image = prepare_input(p.image)
         total = 4 * p.steps + 4  # four sampling stages + camera, decode, GLB bake, export
         done = 0
 
@@ -300,8 +448,21 @@ class Pixal3DEngine:
         sampler = Sampler(**self.spec["sparse_structure_sampler"]["args"])
         sampler.on_step = step
 
-        fov = math.radians(p.fov) if p.fov else self.estimate_fov(image)
-        camera = camera_from_fov(fov)
+        if multiview:
+            fov = math.radians(p.fov or MV_FOV)
+            views = {
+                "images": {size: torch.stack([_view_tensor(v, size) for v in rgba])[None] for size in (512, 1024)},
+                "camera": orbit_cameras([a for a, _ in p.views], fov),
+            }
+
+            def proj_cond(stage, coords=None, grid_resolution=None):
+                return self._proj_cond_mv(stage, views, coords, grid_resolution)
+        else:
+            fov = math.radians(p.fov) if p.fov else self.estimate_fov(image)
+            camera = camera_from_fov(fov)
+
+            def proj_cond(stage, coords=None, grid_resolution=None):
+                return self._proj_cond(stage, image, camera, coords, grid_resolution)
         step()
 
         norm = {k: {s: torch.tensor(v)[None].to(self.device) for s, v in self.spec[f"{k}_slat_normalization"].items()}
@@ -312,7 +473,7 @@ class Pixal3DEngine:
         self.naf.to(self.device)
         try:
             # Stage 1: sparse structure (16^3 latent decoded to 64^3 occupancy, pooled to 32^3)
-            cond = self._proj_cond("ss", image, camera)
+            cond = proj_cond("ss")
             flow = m["sparse_structure_flow_model"]
             noise = torch.randn(1, flow.in_channels, flow.resolution, flow.resolution, flow.resolution).to(self.device)
             z_s = self._sample("sparse_structure", flow, noise, cond, p, sampler)
@@ -327,7 +488,7 @@ class Pixal3DEngine:
                 raise RuntimeError("Pixal3D produced an empty structure")
 
             # Stage 2: shape latent at 512
-            cond = self._proj_cond("shape_512", image, camera, coords)
+            cond = proj_cond("shape_512", coords)
             flow = m["shape_slat_flow_model_512"]
             noise = SparseTensor(feats=torch.randn(coords.shape[0], flow.in_channels).to(self.device), coords=coords)
             lr_slat = self._sample("shape_slat", flow, noise, cond, p, sampler)
@@ -351,7 +512,7 @@ class Pixal3DEngine:
                     break
                 resolution -= 128
             del lr_slat, hr_coords, quant
-            cond = self._proj_cond("shape_1024", image, camera, coords, grid_resolution=resolution // 16)
+            cond = proj_cond("shape_1024", coords, grid_resolution=resolution // 16)
             flow = m["shape_slat_flow_model_1024"]
             noise = SparseTensor(feats=torch.randn(coords.shape[0], flow.in_channels).to(self.device), coords=coords)
             shape_slat = self._sample("shape_slat", flow, noise, cond, p, sampler)
@@ -359,7 +520,7 @@ class Pixal3DEngine:
             del cond, noise
 
             # Stage 4: texture latent, conditioned on the (normalised) shape latent
-            cond = self._proj_cond("tex_1024", image, camera, shape_slat.coords, grid_resolution=resolution // 16)
+            cond = proj_cond("tex_1024", shape_slat.coords, grid_resolution=resolution // 16)
             flow = m["tex_slat_flow_model_1024"]
             normed_shape = (shape_slat - norm["shape"]["mean"]) / norm["shape"]["std"]
             noise = normed_shape.replace(feats=torch.randn(normed_shape.coords.shape[0], flow.in_channels - normed_shape.feats.shape[1]).to(self.device))
