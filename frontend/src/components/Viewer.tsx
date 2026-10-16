@@ -104,7 +104,7 @@ export function Viewer(props: Props) {
               ? "Segmenting 3D model"
               : job.kind === "animate"
               ? `Animating: ${job.params.prompt}`
-              : job.params.prompt || (job.kind === "multiview" ? "Multiview from image" : job.kind === "model3d" ? "3D model from image" : "")}
+              : job.params.prompt || (job.kind === "multiview" ? "Multiview from image" : job.kind === "model3d" ? (job.params.source_views ? `3D model from ${job.params.source_views.length} views` : "3D model from image") : "")}
           </p>
           {(job.status === "queued" || job.status === "loading" || job.status === "running") && (
             <button className="tool-btn" onClick={() => onCancel(job.id)}>

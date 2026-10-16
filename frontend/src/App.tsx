@@ -14,7 +14,7 @@ import { AnimatePanel, type AnimateForm } from "./components/AnimatePanel";
 import { AssetsPanel, type Selection } from "./components/AssetsPanel";
 import { Rail, TopBar, type Tool } from "./components/Chrome";
 import { ImagePanel, SUPPORTED_ARCHS, sizeForArch, type ImageForm } from "./components/ImagePanel";
-import { Model3DPanel, type Model3DForm, type Source3D } from "./components/Model3DPanel";
+import { Model3DPanel, multiviewAzimuths, type Model3DForm, type Source3D } from "./components/Model3DPanel";
 import { MODE_CFG, MultiviewPanel, type MultiviewForm, type Reference } from "./components/MultiviewPanel";
 import { RemeshPanel, type RemeshForm } from "./components/RemeshPanel";
 import { RigPanel, type RigForm } from "./components/RigPanel";
@@ -75,6 +75,8 @@ const DEFAULT_3D_FORM: Model3DForm = {
   p3dFaceLimit: 500_000,
   p3dSteps: 12,
   p3dGuidance: 7.5,
+  p3dMultiview: true,
+  p3dViews: [90, 180, 270],
 };
 
 // MeshFlow's bundled config: 28 steps, image guidance 2.5.
@@ -160,6 +162,7 @@ export default function App() {
   const [source3d, setSource3d] = useState<Source3D | null>(null);
   const [model3dAvailable, setModel3dAvailable] = useState({ triposr: false, triposg: false, pixal3d: false });
   const [pixal3dNote, setPixal3dNote] = useState<string | null>(null);
+  const [pixal3dMv, setPixal3dMv] = useState(false);
   const [meshflowAvailable, setMeshflowAvailable] = useState(false);
   const [meshflowImageAvailable, setMeshflowImageAvailable] = useState(false);
   const [remeshForm, setRemeshForm] = usePersistentForm<RemeshForm>("trivexa.remeshForm", DEFAULT_REMESH_FORM);
@@ -226,6 +229,7 @@ export default function App() {
       setMvSupport(multiview);
       setModel3dAvailable({ triposr: model3d.triposr, triposg: model3d.triposg, pixal3d: model3d.pixal3d });
       setPixal3dNote(model3d.pixal3d_note);
+      setPixal3dMv(model3d.pixal3d_mv);
       setMeshflowAvailable(model3d.meshflow);
       setMeshflowImageAvailable(model3d.meshflow_image);
       setSkintokensAvailable(model3d.skintokens);
@@ -326,9 +330,11 @@ export default function App() {
     if (!source3d) return;
     setSubmitting(true);
     try {
+      const views = multiviewAzimuths(form3d, source3d, pixal3dMv);
       const { jobs: created } = await api.generate3d({
         source_asset: source3d.type === "asset" ? source3d.asset.id : null,
         source_view: source3d.type === "asset" ? source3d.view : 0,
+        ...(views ? { source_views: views } : {}),
         source_image: source3d.type === "upload" ? source3d.dataUrl : null,
         remove_bg: form3d.removeBg,
         engine: form3d.engine,
@@ -691,6 +697,7 @@ export default function App() {
             selected={selectedAsset}
             available={model3dAvailable}
             pixal3dNote={pixal3dNote}
+            pixal3dMv={pixal3dMv}
             bgAvailable={mvSupport?.bg_removal ?? false}
             onGenerate={generate3d}
             submitting={submitting}

@@ -25,6 +25,8 @@ export interface Model3DForm {
   p3dFaceLimit: number;
   p3dSteps: number;
   p3dGuidance: number;
+  p3dMultiview: boolean; // with a multiview set as the source: condition on several of its views
+  p3dViews: number[]; // azimuths picked for that (the front is always used)
 }
 
 const FACE_LIMITS = [
@@ -53,6 +55,7 @@ interface Props {
   selected: Asset | null; // image or multiview asset currently selected in the gallery
   available: Record<Engine3D, boolean>;
   pixal3dNote: string | null; // why Pixal3D is unavailable
+  pixal3dMv: boolean; // its multi-view weights are present
   bgAvailable: boolean;
   onGenerate: () => void;
   submitting: boolean;
@@ -60,6 +63,17 @@ interface Props {
 }
 
 const MAX_UPLOAD = 20 * 1024 * 1024;
+
+/** The views a Pixal3D multi-view request uses, or null for a single-image request. */
+export function multiviewAzimuths(form: Model3DForm, source: Source3D | null, mvAvailable: boolean): number[] | null {
+  if (form.engine !== "pixal3d" || !form.p3dMultiview || !mvAvailable) return null;
+  if (source?.type !== "asset" || source.asset.kind !== "multiview" || !source.asset.views) return null;
+  const have = source.asset.views.map((v) => v.azimuth);
+  const picked = have.filter((a) => a === 0 || form.p3dViews.includes(a));
+  return picked.includes(0) && picked.length >= 2 ? picked : null;
+}
+
+const viewLabel = (azimuth: number) => (azimuth === 0 ? "Front" : `${azimuth}°`);
 
 export function sourcePreview(s: Source3D): string {
   if (s.type === "upload") return s.dataUrl;
@@ -74,7 +88,13 @@ export function Model3DPanel(p: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const sg = form.engine === "triposg";
   const p3d = form.engine === "pixal3d";
-  const canGenerate = p.available[form.engine] && source !== null && !(form.removeBg && !p.bgAvailable) && !p.submitting;
+  const mvSource = source?.type === "asset" && source.asset.kind === "multiview" && source.asset.views ? source.asset : null;
+  const offerViews = p3d && p.pixal3dMv && mvSource !== null;
+  const severalViews = offerViews && form.p3dMultiview;
+  const mvViews = multiviewAzimuths(form, source, p.pixal3dMv);
+  const canGenerate =
+    p.available[form.engine] && source !== null && !(form.removeBg && !p.bgAvailable) && !p.submitting &&
+    !(severalViews && !mvViews);
 
   const readFile = (file: File | undefined) => {
     if (!file) return;
@@ -135,20 +155,64 @@ export function Model3DPanel(p: Props) {
           </button>
         )}
 
-        {source?.type === "asset" && source.asset.kind === "multiview" && source.asset.views && (
+        {offerViews && (
+          <Section label="Views">
+            <Segmented
+              options={[
+                { value: "several", label: "Several views" },
+                { value: "one", label: "One view" },
+              ]}
+              value={form.p3dMultiview ? "several" : "one"}
+              onChange={(v) => setForm({ p3dMultiview: v === "several" })}
+            />
+            {severalViews && (
+              <>
+                <div className="segmented view-picker">
+                  {mvSource!.views!.map(({ azimuth }) => {
+                    const on = azimuth === 0 || form.p3dViews.includes(azimuth);
+                    return (
+                      <button
+                        key={azimuth}
+                        className={on ? "active" : ""}
+                        disabled={azimuth === 0}
+                        title={azimuth === 0 ? "The front view is always used: the others are placed relative to it" : undefined}
+                        onClick={() =>
+                          setForm({ p3dViews: on ? form.p3dViews.filter((a) => a !== azimuth) : [...form.p3dViews, azimuth] })
+                        }
+                      >
+                        {viewLabel(azimuth)}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="hint">
+                  Pixal3D's multi-view models project every picked view onto the shape through its own camera.
+                  Front, sides and back (0/90/180/270°) is upstream's own rig.
+                  {!mvViews && " Pick at least one view besides the front."}
+                </p>
+              </>
+            )}
+          </Section>
+        )}
+
+        {mvSource && !severalViews && source?.type === "asset" && (
           <Section label="View to reconstruct from">
             <select
               className="select"
               value={source.view}
               onChange={(e) => p.setSource({ ...source, view: Number(e.target.value) })}
             >
-              {source.asset.views.map((v) => (
+              {mvSource.views!.map((v) => (
                 <option key={v.azimuth} value={v.azimuth}>
                   {v.azimuth === 0 ? "Front 0°" : `${v.azimuth}°`}
                 </option>
               ))}
             </select>
-            <p className="hint">Every engine reconstructs from a single image; the front view usually works best.</p>
+            <p className="hint">
+              {p3d && p.pixal3dMv
+                ? "Reconstructs from this one image; the front view usually works best."
+                : "Every engine reconstructs from a single image; the front view usually works best."}
+            </p>
           </Section>
         )}
 
@@ -225,7 +289,7 @@ export function Model3DPanel(p: Props) {
                 <Section label="Camera field of view">
                   <Segmented
                     options={[
-                      { value: "auto", label: "Estimate" },
+                      { value: "auto", label: severalViews ? "Rig (20°)" : "Estimate" },
                       { value: "manual", label: "Set" },
                     ]}
                     value={form.p3dFov ? "manual" : "auto"}
@@ -235,8 +299,9 @@ export function Model3DPanel(p: Props) {
                     <Slider label="FOV (°)" min={5} max={90} step={1} value={form.p3dFov} onChange={(p3dFov) => setForm({ p3dFov })} />
                   )}
                   <p className="hint">
-                    Pixal3D projects the image through the camera that took it. MoGe-2 estimates its FOV; set a narrow
-                    one (~12°) if the shape looks stretched in depth.
+                    {severalViews
+                      ? "Pixal3D projects each view through its camera. Multiview sets are orthographic, which a narrow FOV approximates; 20° is upstream's rig."
+                      : "Pixal3D projects the image through the camera that took it. MoGe-2 estimates its FOV; set a narrow one (~12°) if the shape looks stretched in depth."}
                   </p>
                 </Section>
                 <Slider label="Steps" min={4} max={50} step={1} value={form.p3dSteps} onChange={(p3dSteps) => setForm({ p3dSteps })} />

@@ -366,6 +366,17 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Several buttons can be on at once; the always-used front view shows as on, not greyed out. */
+.view-picker {
+  margin-top: 8px;
+  gap: 2px;
+}
+
+.view-picker button:disabled.active {
+  opacity: 1;
+  cursor: default;
+}
+
 .collapse-head {
   width: 100%;
   display: flex;

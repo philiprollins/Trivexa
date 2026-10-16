@@ -46,6 +46,7 @@ export interface MultiviewParams {
 export interface Model3DParams {
   source_asset?: string | null;
   source_view?: number;
+  source_views?: number[]; // Pixal3D multi-view input
   remove_bg: boolean;
   foreground_ratio?: number; // TripoSR
   mc_resolution?: number;
@@ -190,6 +191,8 @@ export const api = {
         triposg: boolean;
         pixal3d: boolean;
         pixal3d_note: string | null;
+        pixal3d_mv: boolean;
+        pixal3d_mv_note: string | null;
         meshflow: boolean;
         meshflow_image: boolean;
         skintokens: boolean;
@@ -206,6 +209,7 @@ export const api = {
   generate3d: (params: {
     source_asset?: string | null;
     source_view?: number;
+    source_views?: number[]; // Pixal3D: several views of a multiview set, the front among them
     source_image?: string | null;
     remove_bg: boolean;
     engine: "triposr" | "triposg" | "pixal3d";

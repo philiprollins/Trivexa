@@ -198,9 +198,12 @@ function Model3DDetails({ asset }: { asset: Asset }) {
         ] as [string, string | number][])
       : pr.engine === "pixal3d"
       ? ([
+          ...(pr.source_views
+            ? ([["Views", pr.source_views.map((a) => (a === 0 ? "front" : `${a}°`)).join(", ")]] as [string, string][])
+            : []),
           ["Resolution", pr.resolution_used && pr.resolution_used !== pr.resolution
             ? `${pr.resolution_used} (of ${pr.resolution})` : pr.resolution ?? "—"],
-          ["Camera FOV", pr.fov_used ? `${pr.fov_used}°${pr.fov ? "" : " (estimated)"}` : "—"],
+          ["Camera FOV", pr.fov_used ? `${pr.fov_used}°${pr.fov ? "" : pr.source_views ? " (rig)" : " (estimated)"}` : "—"],
           ["Texture", pr.texture_size ? `${pr.texture_size} × ${pr.texture_size} PBR` : "—"],
           ["Face limit", pr.face_limit ? pr.face_limit.toLocaleString() : "1,000,000"],
           ["Steps", pr.steps ?? "—"],
